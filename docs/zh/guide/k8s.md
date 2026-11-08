@@ -1,0 +1,281 @@
+---
+title: Kubernetes 支持
+description: 在 Kubernetes 中运行 Dozzle 查看 Pod 日志，包括 RBAC、Metrics API 和 kubelet 统计数据的配置，以及 Pod 重启、命名空间和过滤器。
+sourceHash: b428ac778da5
+---
+
+# Kubernetes 支持
+
+Dozzle 支持 Kubernetes，可以让你查看 Kubernetes Pod 的日志。
+
+## <Icon icon="mdi:package-variant" inline /> 使用 Helm 安装
+
+在集群中运行 Dozzle 最快的方式是使用 Helm chart。它会创建下面手动配置中的所有资源，并把角色绑定到你安装时所用的命名空间。
+
+```bash
+helm install dozzle oci://ghcr.io/amir20/charts/dozzle --namespace dozzle --create-namespace
+```
+
+chart 的版本与 Dozzle 的发布版本一致。配置通过 `env` 设置，容器操作以及网络和磁盘统计所需的额外权限可以用 `rbac.actions` 和 `rbac.nodeStats` 开启：
+
+```yaml
+# values.yaml
+env:
+  - name: DOZZLE_ENABLE_ACTIONS
+    value: "true"
+rbac:
+  actions: true
+  nodeStats: true
+ingress:
+  enabled: true
+  hosts:
+    - host: dozzle.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+```
+
+全部选项见 [`values.yaml`](https://github.com/amir20/dozzle/blob/main/charts/dozzle/values.yaml)。
+
+## <Icon icon="mdi:kubernetes" inline /> Kubernetes 配置
+
+要在 Kubernetes 中部署 Dozzle，可以使用下面这份带有 `DOZZLE_MODE=k8s` 的 YAML 配置。它包含一个 Deployment 和一个用来暴露 Dozzle 的 Service。
+
+```yaml
+# rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pod-viewer
+---
+# clusterrole.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pod-viewer-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+    verbs: ["get"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+# clusterrolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pod-viewer-binding
+subjects:
+  - kind: ServiceAccount
+    name: pod-viewer
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: pod-viewer-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# pvc.yaml
+# ReadWriteOnce 加上 Recreate 策略意味着在 Pod 滚动更新期间，云端配置和
+# 通知规则会短暂不可用（旧 Pod 释放之前，新 Pod 无法挂载）。如果需要零停机的
+# 配置持久化，请使用 ReadWriteMany 存储类（NFS、CephFS 等），并把下面的
+# 策略改为 RollingUpdate。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dozzle-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dozzle
+spec:
+  selector:
+    matchLabels:
+      app: dozzle
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: dozzle
+    spec:
+      serviceAccountName: pod-viewer
+      containers:
+        - name: dozzle
+          image: amir20/dozzle:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DOZZLE_MODE
+              value: "k8s"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: dozzle-data
+---
+# service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: dozzle-service
+spec:
+  type: ClusterIP
+  selector:
+    app: dozzle
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+```
+
+这份配置创建了一个 ServiceAccount、一个 ClusterRole 和一个 ClusterRoleBinding，让 Dozzle 能访问所需的 Kubernetes 资源。它还创建了 Dozzle 的 Deployment，并通过 Service 把它暴露出去。
+
+> [!WARNING]
+> 如果你用 GitOps 工具（比如 Flux CD 或 Argo CD）把它部署到 `default` 之外的某个命名空间，记得修改 **ClusterRoleBinding Subject** 中的**命名空间**
+
+其他所有功能同样受支持，包括身份验证、过滤等等。在 Kubernetes 中配置 Dozzle 时，可以使用和 Docker 中相同的环境变量。
+
+> [!NOTE]
+> Kubernetes 中的 Dozzle 是一个新功能，相比 Docker 版本可能还有一些限制。请通过这个[讨论](https://github.com/amir20/dozzle/discussions/3614)反馈问题或改进建议。
+
+## <Icon icon="mdi:chart-line" inline /> Metrics API
+
+Dozzle 依赖 [Kubernetes Metrics API](https://github.com/kubernetes-sigs/metrics-server) 来获取资源使用信息。可以用下面的命令安装该 API：
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+要确认 API 正在运行，可以执行下面的命令：
+
+```bash
+kubectl top pod
+```
+
+没有它，日志照常可用，只是 CPU 和内存会显示为空。
+
+内存条按容器的内存限制计算使用率。没有设置限制的容器，与 Docker 一样，按其所在节点的内存计算。
+
+## <Icon icon="mdi:harddisk" inline /> 网络和磁盘
+
+Metrics API 不提供网络和磁盘数据。Dozzle 可以从每个节点的 kubelet（`/stats/summary`）读取这些数据，也就是 metrics-server 读取数据的同一个地方。这是可选的：在 ClusterRole 中加入以下规则，网络和磁盘列就会出现。
+
+```yaml
+- apiGroups: [""]
+  resources: ["nodes/stats"]
+  verbs: ["get"]
+```
+
+网络按 pod 统计，因此 pod 的流量显示在名称按字母顺序排在最前的容器上，其他容器不显示流量。磁盘是容器的可写层，加上它挂载的 PVC 和 `emptyDir` 卷。
+
+Dozzle 直接通过节点的内部 IP（端口 10250）访问每个 kubelet，从不经过 API server 的节点代理。那样需要 `nodes/proxy` 权限，而该权限允许在任意容器中执行 exec。kubelet 的服务证书必须由集群 CA 签发，k3s 就是如此。如果 kubelet 使用自签名证书（kubeadm 默认、kind），这些列会保持隐藏，Dozzle 会记录一次原因。
+
+## <Icon icon="mdi:restart" inline /> 容器操作
+
+设置 `DOZZLE_ENABLE_ACTIONS=true` 后，Dozzle 可以重启容器。Kubernetes 不支持单独停止或启动某个容器，所以重启是唯一的操作。Dozzle 通过删除 Pod 来重启，由它的控制器（Deployment、StatefulSet、DaemonSet 或 Job）创建新的 Pod，效果和 `kubectl delete pod` 一样。没有控制器的 Pod 永远不会被删除。
+
+删除 Pod 需要的权限，上面的只读角色并没有授予。请在 ClusterRole 中加上这条规则：
+
+```yaml
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["delete"]
+```
+
+### 滚动重启
+
+对于有多个副本的工作负载，逐个重启 Pod 并不合适。属于 Deployment、StatefulSet 或 DaemonSet 的容器，其菜单中还会多出一个 **重启 Deployment**（或 StatefulSet、DaemonSet）操作，侧边栏中该工作负载的合并视图菜单里也有同样的操作。它的效果与 `kubectl rollout restart` 相同：控制器按照工作负载自身的发布策略替换所有 Pod，因此会遵守 `maxUnavailable`。`imagePullPolicy: Always` 的 Pod 会在此过程中重新拉取镜像，`:latest` 标签就是这样获取新镜像的。
+
+Job、CronJob 和独立的 ReplicaSet 无法滚动重启，因此不会显示该操作。和其他操作一样，它只作用于 Pod 通过 Dozzle 过滤条件的工作负载。
+
+滚动重启需要修补（patch）工作负载的权限。请在 ClusterRole 中添加以下规则：
+
+```yaml
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets", "daemonsets"]
+  verbs: ["patch"]
+```
+
+## <Icon icon="mdi:filter-variant" inline /> 命名空间与过滤
+
+### 命名空间
+
+默认情况下，Dozzle 会监控集群中的所有命名空间。如果你想把 Dozzle 限制在某个命名空间内，可以把 `DOZZLE_NAMESPACE` 环境变量设为该命名空间的名称。
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dozzle
+spec:
+  selector:
+    matchLabels:
+      app: dozzle
+  template:
+    metadata:
+      labels:
+        app: dozzle
+    spec:
+      serviceAccountName: pod-viewer
+      containers:
+        - name: dozzle
+          image: amir20/dozzle:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DOZZLE_MODE
+              value: "k8s"
+            - name: DOZZLE_NAMESPACE
+              value: "default"
+```
+
+> [!NOTE]
+> Dozzle 支持多个命名空间，你可以把 `DOZZLE_NAMESPACE` 环境变量设为用逗号分隔的命名空间列表。指定多个命名空间时，Dozzle 会分别监控每个命名空间，然后把结果合并起来。
+
+### 标签与过滤
+
+`DOZZLE_FILTER` 的行为与 Docker 过滤条件类似。你可以用 `DOZZLE_FILTER` 环境变量限制 Dozzle 的范围。例如，只限定在 `env=prod`：
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dozzle
+spec:
+  selector:
+    matchLabels:
+      app: dozzle
+  template:
+    metadata:
+      labels:
+        app: dozzle
+    spec:
+      serviceAccountName: pod-viewer
+      containers:
+        - name: dozzle
+          image: amir20/dozzle:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DOZZLE_MODE
+              value: "k8s"
+            - name: DOZZLE_FILTER
+              value: "env=prod"
+```

@@ -3,11 +3,13 @@
 package migration
 
 import (
+	"io"
 	"os"
 	"time"
 
+	"github.com/amir20/dozzle/internal/utils"
 	"github.com/rs/zerolog/log"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 type notificationConfig struct {
@@ -108,14 +110,14 @@ func MigrateCloudConfig(notificationsPath, cloudPath string) {
 }
 
 func writeYAML(path string, v any) error {
-	file, err := os.Create(path)
-	if err != nil {
+	return utils.WriteFile(path, func(w io.Writer) error {
+		data, err := yaml.Marshal(v)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(data)
 		return err
-	}
-	defer file.Close()
-	encoder := yaml.NewEncoder(file)
-	defer encoder.Close()
-	return encoder.Encode(v)
+	})
 }
 
 func fileExists(path string) bool {

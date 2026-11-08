@@ -5,6 +5,10 @@ toolbar:
   search: Iskanje
   inverse-on: Izključi ujemanja (obratno)
   inverse-off: Vključi ujemanja (običajno)
+  invalid-regex: Neveljaven regularni izraz
+  close-search: Zapri iskanje
+  move-search: Povlecite za premik
+  search-all-containers: Išči po vseh vsebnikih
   show: Prikaži {std}
   show-all: Prikaži vse
   stop: Ustavi
@@ -12,32 +16,90 @@ toolbar:
   show-container-name: Prikaži ime zabojnika
   shell: Lupina
   attach: Priloži
+  inspect: "Preglej"
   copy-permalink: Kopiraj trajno povezavo
   copy-image: "Kopiraj oznako slike"
+  image-version: "{image} je trenutno {version}"
+  pin: "Pripni"
+  unpin: "Odpni"
   copy-logs: Kopiraj dnevnike
   copy-filtered-logs: Kopiraj filtrirane dnevnike
   copying-logs: Kopiranje dnevnikov...
+  streams: Tokovi
+  levels: Ravni
+  toggle-all-levels: Preklopi vse ravni
+  all: Vse
+  none: Brez
+  section-logs: Dnevniki
+  section-filters: Filtri
+  section-display: Prikaz
+  section-export: Izvoz
+  section-container: Vsebnik
+  section-image: Slika
+  section-workload: "Delovna obremenitev"
   restart: Ponovni zagon
+  rollout-restart: "Znova zaženi {kind}"
+  rollout-restart-done: "{workload} uvaja nove pode."
+  section-containers: "Zabojniki"
+  restart-all: "Ponovno zaženi vse"
+  stop-all: "Ustavi vse"
+  start-all: "Zaženi vse"
+  bulk-confirm-restart: "Ponovno zaženem zabojnike: 1? | Ponovno zaženem zabojnike: {count}?"
+  bulk-confirm-stop: "Ustavim zabojnike: 1? | Ustavim zabojnike: {count}?"
+  bulk-confirm-start: "Zaženem zabojnike: 1? | Zaženem zabojnike: {count}?"
+  bulk-self-skipped: "Dozzlov lastni zabojnik je preskočen."
+  bulk-more: "in še {count}"
+  bulk-failed: "Ni uspelo za {names}"
   update: Posodobi
   update-service: Posodobi Storitev
   update-pulling: Prenašanje najnovejše slike...
   update-recreating: Ponovno ustvarjanje zabojnika...
+  update-verifying: Preverjanje, ali novi zabojnik ostane zagnan...
+  update-rolled-back: Novi zabojnik ni ostal zagnan, zato je bil obnovljen prejšnji.
   update-done: Zabojnik uspešno posodobljen
   update-up-to-date: Že posodobljen
-  update-available: 'Na voljo je posodobitev'
-  check-for-updates: 'Preveri posodobitve'
-  checking-for-updates: 'Preverjanje posodobitev...'
-  no-updates: 'Ni posodobitev'
-  dismiss-update: 'Opusti to posodobitev'
-  view-release-notes: 'Poglej opombe ob izdaji'
+  update-available: "Na voljo je posodobitev"
+  check-for-updates: "Preveri posodobitve"
+  checking-for-updates: "Preverjanje posodobitev..."
+  no-updates: "Ni posodobitev"
+  dismiss-update: "Opusti to posodobitev"
+  view-release-notes: "Poglej opombe ob izdaji"
   show-hostname: Prikaži ime gostitelja
 action:
   copy-log: Kopiraj dnevnik
   copy-link: Kopiraj trajno povezavo
   see-in-context: Glej v kontekstu
+  search-similar: Poišči podobne
   show-details: Prikaži podrobnosti
   create-alert: Ustvari opozorilo
+  ask-about-log: Vprašaj o tem dnevniku
+log-details:
+  on-std: na {std}
+  image: Slika
+  raw-json: Neobdelan JSON
+  copy: Kopiraj
+  download: Prenesi JSON
+  fields: Polja
+  field: Polje
+  value: Vrednost
+  fields-hint: Povlecite za spremembo vrstnega reda. Preklopite za prikaz ali skritje v toku dnevnikov.
+  chart-field: "Prikaži {field} v grafu v analitiki SQL"
+  toggle-all: Preklopi vsa polja
+  toggle-field: Prikaži ali skrij v toku dnevnikov
+  memory-title: "Novo za ta zabojnik"
+  memory-explain: "Dozzle Cloud tega vzorca na tem zabojniku še ni videl. Vrstice, ki se razlikujejo le po številkah, ID-jih ali naslovih, štejejo kot en vzorec."
+  memory-pattern: "Vzorec"
+  memory-first-seen: "Prvič viden"
+  memory-first-seen-now: "S to vrstico"
+  memory-last-hour: "Zadnja ura"
+  memory-lines: "Ni vrstic | 1 vrstica | {count} vrstic"
 label:
+  hide-sidebar: "Skrij stransko vrstico"
+  show-sidebar: "Prikaži stransko vrstico"
+  host-unreachable: "nedosegljiv"
+  agent-unreachable: "Agenta na {endpoint} ni mogoče doseči"
+  agent-outdated: "agent {version}"
+  historical-at: "Zgodovinski dnevniki · {time}"
   containers: Zabojniki
   host-count: Ni Gostiteljev | 1 Gostitelj | {count} Gostiteljev
   service: Ni storitev | 1 storitev | {count} storitev
@@ -45,15 +107,19 @@ label:
   all-containers: Vsi zabojniki
   all-namespaces: Vsi
   namespaces: Imenski prostori
+  owners: Lastniki
   host: Gostitelj
   hosts: Gostitelji
   password: Geslo
   username: Uporabniško ime
+  or: ali
   status: Stanje
   created: Ustvarjeno
-  avg-cpu: CPE povprečje (%)
+  avg-cpu: CPE povprečje
   pinned: Pripeto
   per-page: Vrstic na stran
+  columns: Stolpci
+  moving-average: Uporabi drseče povprečje
   sort-by: Razvrsti po
   sort-direction: Zamenjaj vrstni red
   host-menu: Gostitelji in zabojniki
@@ -64,6 +130,8 @@ label:
   collapse-all: Strni vse
   collapse-group: Strni skupino
   expand-all: Razširi vse
+  more-options: Več možnosti
+  groups: Skupine
   container-name: Ime zabojnika
   container: Ni zabojnikov | 1 zabojnik | {count} zabojnikov
   alert-events: Ni dogodkov | 1 dogodek | {count} dogodkov
@@ -76,35 +144,79 @@ label:
   event-suppressed-hint: Dozzle Cloud je to vrstico zaznal, a zadržal opozorilo
   event-metric: Metrika
   event-container: Zabojnik
+  memory-new: "Novo"
   services: Storitve
-  avg-mem: Povprečje spomina (%)
+  avg-mem: Povprečje spomina
   name: Ime
   cpu: CPU
+  core: Ni jeder | 1 jedro | {count} jeder
+  disk: Disk
+  disk-io: Diskovni V/I
+  network: Omrežje
+  reclaimable: Za sprostitev
+  unused-images: "Neuporabljene slike"
+  unused-volumes: "Neuporabljeni nosilci"
+  stopped-containers: "Ustavljeni vsebniki"
+  build-cache: "Predpomnilnik gradenj"
+  load: Obremenitev
+  uptime: Čas delovanja
   mem: MEM
   no-logs: Zabojnik še nima dnevnika
+  no-logs-hint: "Vse, kar vsebnik zapiše, se takoj pojavi tukaj."
   search-status:
     searching: Iskanje po starejših dnevnikih…
-    searching-to: Iskanje po starejših dnevnikih… nazaj do {time}
-    capped: "{count} zadetkov · iskano nazaj do {time}"
-    exhausted: Preiskani vsi dnevniki · {count} zadetkov
-    empty: Ni zadetkov · preiskani vsi dnevniki
+    matches: "{count} zadetkov"
+    searched-all: "Preiskani vsi dnevniki"
+    scanned-to: "nazaj do {time}"
+    empty: "Ni ujemajočih se dnevnikov"
+    empty-hint: "Preiskani vsi dnevniki. Poskusite z drugim izrazom ali počistite iskanje."
 tooltip:
+  memory-new: "Dozzle Cloud te napake v tem vsebniku še ni videl. Kliknite za prikaz v kontekstu."
+  memory-new-since: "Prvič opažena v tem vsebniku: {time}. Kliknite za prikaz, kje se je začela."
+  live-logs: Ti dnevniki so zamrznjeni na tem trenutku. Kliknite za spremljanje živega toka.
   search: Iskanje zabojnikov (⌘ + k, ⌃k)
   pin-column: Pripni kot stolpec
+  unpin-column: Odpni stolpec
+  merge-stream: Združi s tokom
+  merge-stream-hint: Odprite vsebnik za združevanje
+  unmerge-stream: Odstrani iz toka
   merge-all: Združi vse v en tok
   network-io: "Omrežje: ↑ {tx}/s · ↓ {rx}/s"
   disk-io: "Disk: ↑ {write}/s · ↓ {read}/s"
   cpu-usage: "CPE {cpu}% / {cores} jeder"
   memory-usage: "Pomnilnik {used} / {total}"
+  disk-layer: "Zapisljiva plast: {size}"
+  disk-volume-shared: "{name}: {size} (v skupni rabi {count} vsebnikov)"
+  reclaimable-source: "Enak skupni seštevek, kot ga poroča {command}."
   volumes: Nosilci
   volume-unreachable: nedosegljivo iz tega gostitelja
   volume-full: "{destination} je {pct} poln"
+  open-container-url: "Odpri {url}"
+  agent-version: "Agent Dozzle {version}"
+  agent-version-mismatch: "Agent {version} in Dozzle {current} imata različni različici. Na obeh uporabite isto različico."
+popup:
+  group: Skupina
+  ports: Vrata
+container-status:
+  up: "Deluje {duration}"
+  paused: "Zaustavljen, deluje {duration}"
+  restarting: "Ponovni zagon, ustavljen {time}"
+  exited: "Končan {time}"
+hint:
+  learn-more: Več o tem
+  dismiss: Ne prikaži več
+link-hint:
+  title: Poveži ta zabojnik
+  description: Dozzle prikaže povezavo do spletnega vmesnika zabojnika, ko dodate oznako dev.dozzle.url. Dodajte to v datoteko compose in znova zaženite zabojnik.
+  copy: Kopiraj
 error:
   page-not-found: Ta stran ne obstaja
   host-group-not-found: 'V skupini "{name}" ni najdenih gostiteljev'
   invalid-auth: Uporabniško ime ali geslo nista veljavna
+  oauth-failed: Prijava ni uspela. Poskusite znova.
   copy-not-supported: Kopiranje v odložišče ni podprto v vašem brskalniku
-  copy-not-supported-hint: Odložišče ni na voljo. Kopirajte spodnjo povezavo
+  copy-insecure: Odložišče je blokirano prek http
+  copy-insecure-hint: Vaš brskalnik dovoljuje dostop do odložišča samo prek https. Besedilo kopirajte ročno.
   logs-skipped: Prikaži {total} skritih vnosov
   events-stream:
     title: Nepričakovana napaka
@@ -116,19 +228,22 @@ error:
     message: Časovna omejitev uporabniškega vmesnika Dozzle je potekla med
       povezovanjem z API-jem. Preverite omrežno povezavo in poskusite znova.
   container-not-found: Zabojnika ni bilo mogoče najti
+  container-not-found-hint: Morda je bil odstranjen ali pa njegov gostitelj ni več dosegljiv.
+  nothing-running: "Tu nič ne teče"
+  nothing-running-hint: "Noben vsebnik v tem pogledu ne teče. Dnevniki se prikažejo tukaj, ko se kateri zažene."
   action-failed: Dejanje Neuspešno
   update-failed: Posodobitev Neuspešna
   unable-to-complete-action: Dejanja ni mogoče dokončati
   invalid-action: Neveljavno dejanje
   unable-to-update: Zabojnika ni mogoče posodobiti
+  start-container-first: Najprej zaženite vsebnik
   something-went-wrong: Nekaj je šlo narobe
   unknown-error: Neznana napaka
 alert:
   image-update:
-    title: 'Na voljo je posodobitev'
-    message: 'Za {image} je bila objavljena novejša slika.'
+    title: "Na voljo je posodobitev"
+    message: "Za {image} je bila objavljena novejša slika."
     enable-actions: '<a href="https://dozzle.dev/guide/actions" target="_blank" rel="noreferrer noopener">Omogoči dejanja</a> za prenos in ponovno ustvarjanje od tu.'
-    self: 'Dozzle se ne more posodobiti sam, zato ga znova zaženi, da uveljaviš posodobitev.'
   redirected:
     title: Preusmerjeno v nov zabojnik
     message: Dozzle vas je samodejno preusmeril v nov zabojnik {containerId}.
@@ -148,56 +263,74 @@ title:
   settings: Nastavitve
   notifications: Obvestila
 button:
+  back-to-dashboard: Nazaj na nadzorno ploščo
+  live-logs: Pojdi na žive dnevnike
   logout: Odjava
   cancel: Prekliči
   redirect: Preusmeritev
   retry: Poskusi znova
   login: Prijava
+  login-with: Nadaljuj z {provider}
   settings: Nastavitve
   refresh: Osveži
 placeholder:
   search-containers: Iskanje zabojnikov (⌘ + k, ⌃k)
+  find-logs: Iskanje po dnevnikih ali regex
   search: Iskanje
 settings:
-  show-image-update-alert: 'Pokaži obvestilo, ko je za vsebnik na voljo posodobitev'
-  show-image-update-alert-desc: 'V registru preveri, ali obstaja novejša oznaka slike.'
-  about-desc: Informacije o vaši namestitvi Dozzle in kako podpreti projekt.
-  display-desc: Prilagodite videz dnevnikov in preostalega dela aplikacije. Predogled v živo prikazuje vaše spremembe.
-  options-desc: Nastavitve jezika, navigacije in združevanja.
-  cloud-desc: Pretakajte dnevnike v Dozzle Cloud za preiskave z umetno inteligenco in iskanje med instancami.
-  support-title: Podprite Dozzle
-  support-help: Donacije pomagajo, da Dozzle ostane brezplačen in vzdrževan. Hvala 🙏
-  display: Prikaz
-  locale: Preglasi jezik
-  locale-desc: 'Privzeto sledi jeziku brskalnika.'
-  small-scrollbars: Uporabite manjše drsne trakove
-  small-scrollbars-desc: 'Tanjši drsniki, priročno na manjših zaslonih.'
-  show-timestamps: Prikaži časovne žige
-  show-timestamps-desc: 'Pred vsako vrstico doda čas, ko je bila zapisana.'
-  soft-wrap: Mehke ovojne linije
-  soft-wrap-desc: 'Prelomi dolge vrstice namesto drsenja vstran.'
-  datetime-format: Preglasi obliko zapisa datuma in časa
-  datetime-format-desc: 'Privzeto sledi jeziku in uri v brskalniku.'
-  font-size: Velikost pisave za dnevnike
-  font-size-desc: 'Velja samo za izpis dnevnika, ne za preostanek aplikacije.'
-  color-scheme: Barvna shema
-  color-scheme-desc: 'Samodejno sledi nastavitvi sistema.'
-  options: Možnosti
-  show-stopped-containers: Prikaži ustavljene zabojnike
-  show-stopped-containers-desc: 'Vključi ustavljene vsebnike v stranski vrstici in seznamih.'
-  group-containers: Združi zabojnike po imenskem prostoru
-  group-containers-desc: 'Združuje po projektu Compose, skladu Swarm ali dev.dozzle.group.'
-  show-app-icons: 'Prikaži ikone aplikacij'
-  show-app-icons-desc: 'Znane slike poveži z njihovim logotipom. Ikone so priložene Dozzle in se nikoli ne prenašajo iz interneta.'
+  subtitle: Nastavitve za ta brskalnik. Spremembe se shranijo samodejno.
+  subtitle-server: "Nastavitve za ta Dozzle, skupne vsem, ki ga uporabljajo."
+  appearance: Videz
+  logs: Dnevniki
+  sidebar: Stranska vrstica
+  behavior: Vedenje
+  advanced: Napredno
   about: O programu
-  search: Omogočite iskanje z Dozzle z uporabo
-  search-desc: 'Išče po dnevniku vsebnika, ki ga gledate.'
-  update-available: Nova različica je na voljo! Posodobi na <a href="{href}"
-    target="_blank" rel="noreferrer noopener">{nextVersion}</a>.
+  general: Splošno
+  updates: Posodobitve
+  security: "Varnost"
+  hosts: "Gostitelji"
+  login-desc: "Kdo lahko odpre Dozzle. Brez prijave lahko vsak, ki ga doseže, bere vaše dnevnike."
+  login-off: "Brez prijave"
+  login-docs: "Vodnik za overjanje"
+  set-by-flags: "V tem načinu se nastavi z zastavicami ali okoljskimi spremenljivkami."
+  hosts-found: "V tem načinu Dozzle te gostitelje najde sam."
+  after-restart: "Po ponovnem zagonu"
+  restart-pending: "Sprememb po ponovnem zagonu: 1 | Sprememb po ponovnem zagonu: {count}"
+  run-setup: "Znova zaženi nastavitev"
+  run-setup-desc: "Vodeni pregled prijave, dejanj, gostiteljev, Dozzle Cloud in posodobitev. Vse v njem je tudi v Nastavitvah."
+  reset: Ponastavi na privzeto
+  sponsor: Podpri
+  new-version: "Na voljo je {version}"
+  update-available: "Na voljo je novejša slika"
+  auto-update-on: "Dozzle se posodablja sam"
+  show-image-update-alert: "Opozorila o posodobitvah slik"
+  show-image-update-alert-desc: "Obvesti, ko obstaja novejša oznaka slike, ki se izvaja."
+  cloud-desc: Pretakajte dnevnike v Dozzle Cloud za preiskave z umetno inteligenco in iskanje med instancami.
+  locale: Jezik
+  small-scrollbars: Tanki drsniki
+  small-scrollbars-desc: "Tanjši drsniki, priročno na manjših zaslonih."
+  show-timestamps: Prikaži časovne žige
+  show-timestamps-desc: "Prikaže, kdaj je bila vsaka vrstica zapisana."
+  soft-wrap: Prelom vrstic
+  soft-wrap-desc: "Dolge vrstice prelomi, namesto da se pomikajo vstran."
+  highlight-errors: Označi vrstice z napakami
+  highlight-errors-desc: "Barvna oznaka ravni je vedno prikazana."
+  date-format: "Oblika datuma"
+  time-format: "Oblika časa"
+  font-size: Velikost pisave
+  color-scheme: Tema
+  show-stopped-containers: Prikaži ustavljene zabojnike
+  group-containers: Združi zabojnike
+  group-containers-desc: "Po projektu Compose, skladu Swarm ali dev.dozzle.group."
+  show-app-icons: "Ikone aplikacij"
+  show-app-icons-desc: "Priložene Dozzlu, nikoli prenesene z interneta."
+  search: Iskanje po dnevnikih s
+  search-desc: "Nadomesti iskanje brskalnika med ogledom zabojnika."
   show-std: Prikaži oznake stdout in stderr
-  show-std-desc: 'Označi, ali vrstica prihaja iz stdout ali stderr.'
-  compact: Omogoči kompaktni način za dnevnike
-  compact-desc: 'Zmanjša razmike med vrsticami dnevnika, da jih je na zaslonu več.'
+  show-std-desc: "Označi, ali vrstica prihaja iz stdout ali stderr."
+  compact: Kompaktni način
+  compact-desc: "Manjši razmiki, da se na zaslon prilega več vrstic."
   size:
     small: Majhna
     medium: Srednja
@@ -212,12 +345,12 @@ settings:
     none: Brez
   grouping:
     always: Vedno
-    at-least-2: Vsaj 2
+    at-least-2: "Skupine z 2 ali več"
     never: Nikoli
   hour:
     auto: Samodejno
-    12: "12"
-    24: "24"
+    "12": "12-urna"
+    "24": "24-urna"
   log:
     preview: To je predogled dnevnikov
     warning: Dnevnik opozoril izgleda tako
@@ -230,29 +363,27 @@ settings:
       onemogočite mehke ovoje, bi to onemogočili. Lorem ipsum dolor sit amet,
       consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et
       dolore magna aliqua.
-  using-version: Uporabljaš <a href="https://dozzle.dev/" target="_blank"
-    rel="noreferrer noopener">Dozzle</a> {version}.
-  help-support: "Prosimo, podprite Dozzle z donacijo ali sponzoriranjem na GitHubu.
-    Vaši prispevki nam pomagajo izboljšati Dozzle za vse. Hvala! 🙏🏼\n"
-  automatic-redirect: Samodejna preusmeritev na nove zabojnike z istim imenom
-  automatic-redirect-desc: 'Ko je vsebnik zamenjan, sledi novemu.'
+  automatic-redirect: Sledi ponovno ustvarjenim zabojnikom
+  automatic-redirect-desc: "Ko je zabojnik zamenjan, skoči na novega."
 releases:
   features: ena nova funkcija | {count} funkcij
   bugFixes: en popravek napake | {count} popravkov
   breaking: ena ključna sprememba | {count} ključnih sprememb
   three_parts: "{first}, {second} in {third}"
-  two_parts: "{first} s/z {second}"
+  two_parts: "{first} in {second}"
   latest: Najnovejše
   no_releases: Imate najnovejšo različico
-log_actions:
-  copy_log: Kopiraj dnevnik
-  jump_to_context: Skoči na kontekst
+  newer: "1 novejša izdaja | {count} novejših izdaj"
+  all: Vse izdaje
+  updates_summary: "1 posodobljen vsebnik | {count} posodobljenih vsebnikov"
+  agents_mismatched: "1 agent z drugačno različico | {count} agentov z drugačno različico"
 toasts:
   copied:
     title: Kopirano
     message: Kopirano v odložišče
 analytics:
-  downloading: Pridobivanje dnevnikov zabojnika... ({size})
+  fetching_logs: Pridobivanje dnevnikov zabojnika
+  loading_engine: Nalaganje mehanizma SQL
   evaluating_query: Ocenjevanje poizvedbe...
   total_records: Skupaj zapisov {count}.
   showing_first: Prikaz prvih {count}.
@@ -264,19 +395,98 @@ analytics:
   example_all: Vsi dnevniki
   example_count: Število vrstic
   example_group: Štetje po {column}
+  example_by_container: Po vsebnikih
+  include_previous: "Vključi starejše vsebnike ({count})"
+  containers_count: "Vsebniki: {count}"
   export: Izvozi
   export_csv: Prenesi CSV
   export_json: Prenesi JSON
+  query: Poizvedba
+  run: Zaženi
+  results: Rezultati
+  min: Min
+  avg: Povp
+  max: Maks
+  p50: P50
+  p95: P95
+  distribution_of: "Porazdelitev {column}"
+  rows: 1 vrstica | {count} vrstic
+updates:
+  title: Posodobitve
+  count: 1 posodobitev | {count} posodobitev
+  available: Na voljo je 1 posodobitev | Na voljo je {count} posodobitev
+  running: Posodabljanje…
+  subtitle: Ti vsebniki uporabljajo starejšo sliko, kot jo ponuja njihov register.
+  subtitle-running: Vsak gostitelj posodablja po en vsebnik naenkrat.
+  none: Vsi vsebniki uporabljajo najnovejšo sliko svoje oznake.
+  update-selected: Posodobi | Posodobi 1 | Posodobi {count}
+  self-last: Dozzle se posodobi zadnji in se nato znova zažene.
+  read-only: Posodabljanje od tu zahteva dejanja vsebnikov in vlogo update.
+  auto: Samodejno
+  auto-hint: Posodablja se tudi po urniku samodejnih posodobitev
+  auto-footnote: Vsebniku dodajte oznako {label}, da se posodablja po urniku samodejnih posodobitev.
+  check-only: Ima oznako {label}, zato se posodablja zunaj Dozzla.
+  scheduled-running: Urnik samodejnih posodobitev se pravkar izvaja.
+  progress: Končano {done} od {total}
+  back: Nazaj
+  busy: Druga posodobitev že poteka.
+  summary: "Posodobljeno: {updated}"
+  summary-failed: "Posodobljeno: {updated}, neuspešno: {failed}"
+  status:
+    queued: V vrsti
+    pulling: Prenašanje
+    recreating: Ponovno ustvarjanje
+    verifying: Preverjanje
+    done: Posodobljeno
+    rolled-back: Povrnjeno
+    up-to-date: Ažurno
+    error: Napaka
+  release-notes: Opombe ob izdaji
+  version:
+    rebuilt: ponovno zgrajena
+    unknown: Različica neznana ({reason})
+    undeclared: slika je ne navaja
+    rate-limited: omejitev zahtev registra
+    auth: register zahteva prijavo
+    failed: poizvedba ni uspela
 drawer:
   maximize: Maksimiraj
   restore: Obnovi
+terminal:
+  connecting: Povezovanje
+  connected: Povezano
+  closed: Prekinjeno
+  connection-closed: Povezava je zaprta
+  not-running: Zabojnik ne teče
+  reconnect: Ponovno poveži
+  attaching: Povezovanje z {name}
+  decrease-font: Zmanjšaj velikost pisave
+  increase-font: Povečaj velikost pisave
+  search: Iskanje
+  no-results: Ni zadetkov
+  previous-match: Prejšnji zadetek
+  next-match: Naslednji zadetek
+  close-search: Zapri iskanje
 notifications:
+  history:
+    title: Dejavnost
+    loading: Nalaganje dejavnosti…
+    failed: Dejavnosti ni bilo mogoče naložiti.
+    empty: Nedavno se ni sprožilo nič.
+    still-happening: še vedno se dogaja
+    events: "{n} dogodkov"
+    suppressed: "· {n} zadržanih"
+    show-lines: Pokaži mi vrstice
+    show-moment: Pokaži dnevnike okoli
+    open-in-cloud: Odpri v Dozzle Cloud
+    fired-recently: krat nedavno
   title: Obvestila
   description: Nastavite kje in kdaj prejemati opozorila
   destinations: Cilji
   add-destination: Dodaj cilj
   alerts: Opozorila
   add-alert: Dodaj opozorilo
+  new-alerts: Nova opozorila
   prefill-name: Opozorila o napakah
   prefill-expression: level == "error"
   add: Dodaj
@@ -285,6 +495,7 @@ notifications:
     enabled: Omogočeni ({count})
     paused: Ustavljeni ({count})
   no-alerts: Opozorila še niso nastavljena. Ustvarite enega za začetek.
+  no-alerts-in-filter: Nobeno opozorilo ne ustreza temu filtru.
   default-alert-created: Za vas smo ustvarili privzeto opozorilo. Obvestili vas bomo, ko se zabojnik konča z napako. Kadar koli ga lahko uredite ali začasno ustavite.
   default-alert-failed: Opozorila ni bilo mogoče ustvariti samodejno. Uporabite spodnji obrazec.
   alert:
@@ -297,54 +508,122 @@ notifications:
     sample-window: Vzorčno okno
     destination: Cilj
     dispatcher-deleted: Pošiljatelj izbrisan
-    containers-count: "{count} zabojnikov"
-    triggered-count: "{count} sproženih"
+    containers-count: "v 1 vsebniku | v {count} vsebnikih"
+    triggered-count: "Sproženo enkrat | Sproženo {count}-krat"
+    never-triggered: Nikoli sproženo
     last-triggered: "Zadnje: {time}"
+    delete-warning: Izbrišem to opozorilo?
+    delete-cancel: Obdrži
+    delete-confirm: Izbriši
+    window-meta: "okno {duration}"
+    cooldown-meta: "premor {duration}"
   destination:
     http-webhook: HTTP Webhook
     dozzle-cloud: Dozzle Cloud
     edit: Uredi
     duplicate: Podvoji
     delete: Izbriši
+    used-by: "Uporablja ga 1 opozorilo | Uporablja ga {count} opozoril"
+    unused: Ne uporablja ga nobeno opozorilo
+    copy-of: "Kopija {name}"
+    copy-failed: Tega cilja ni bilo mogoče podvojiti
+    delete-failed: Tega cilja ni bilo mogoče izbrisati
+    delete-warning: Izbrišem ta cilj?
+    delete-warning-used: "1 opozorilo pošilja sem in bo prenehalo obveščati. | {count} opozoril pošilja sem in bo prenehalo obveščati."
+    delete-cancel: Obdrži
+    delete-confirm: Izbriši
   alert-form:
     create-title: Ustvari Opozorilo
     edit-title: Uredi Opozorilo
-    description: Naročite se na dogodke dnevnika, ki ustrezajo vašim kriterijem
+    description-log: Prejmite obvestilo, ko se v dnevnikih vsebnikov pojavijo ustrezne vrstice
+    description-metric: Prejmite obvestilo, ko poraba CPE, pomnilnika ali diska vsebnika preseže prag
+    description-event: Prejmite obvestilo, ko se vsebniki zaženejo, ustavijo, končajo ali spremenijo stanje
+    required: Obvezno
+    still-needed: "Še manjka: {fields}"
+    missing:
+      container-expression: vsebniki
+      condition: pogoj
+      destination: cilj
+      name: ime
     alert-name: Ime Opozorila
     alert-name-placeholder: npr., Napake Testnega API-ja
-    container-filter: Filter Zabojnikov
-    containers-match: "{count} zabojnikov ustreza: {names}"
-    no-containers-match: Noben zabojnik ne ustreza temu filtru
-    log-filter: Filter Dnevnika
-    logs-match: "{count} dnevnikov ustreza"
-    no-logs-match: Noben dnevnik ne ustreza temu filtru
+    alert-name-hint: Prikazano na kartici opozorila in v vsakem poslanem obvestilu.
+    container-filter: Vsebniki
+    container-filter-hint: Katere vsebnike to opozorilo nadzoruje. Upoštevani so samo delujoči vsebniki.
+    containers-match: "Ustreza 1 delujočemu vsebniku: {names} | Ustreza {count} delujočim vsebnikom: {names}"
+    no-containers-match: Noben delujoč vsebnik ne ustreza temu filtru
+    checking: Preverjanje…
+    examples: "Primeri:"
+    use-example: Uporabi ta primer
+    seconds-unit: s
+    log-filter: Pogoj dnevnika
+    log-filter-hint: Katere vrstice dnevnika sprožijo opozorilo.
+    logs-match: "1 ustrezna vrstica v zadnjih {window} | {count} ustreznih vrstic v zadnjih {window}"
+    no-logs-match: Nobena vrstica ne ustreza v zadnjih {window}
+    log-preview-hint: Napišite pogoj, da vidite, katere nedavne vrstice dnevnika bi sprožile to opozorilo.
+    log-scan-note: "Predogled je pregledal prvi ustrezni vsebnik. | Predogled je pregledal prvih {count} ustreznih vsebnikov."
+    preview-needs-containers: Najprej izberite vsebnike za predogled z resničnimi podatki.
+    preview-fix-expression: Popravite izraz, da vidite predogled.
     destination: Cilj
-    select-destination: Izberite cilj
-    no-destinations: Cilji niso nastavljeni. Najprej dodajte enega.
+    no-destinations: Ciljev še ni nastavljenih.
     preview: Predogled
     cancel: Prekliči
     save: Shrani
     create: Ustvari Opozorilo
-    metric-filter: Izraz metrike
-    expression-valid: Izraz je veljaven
-    metric-fields-hint: "Razpoložljiva polja: {fields}"
+    discard-title: Zavržem to opozorilo?
+    discard-keep: Nadaljuj urejanje
+    discard-confirm: Zavrzi
+    metric-filter: Pogoj metrike
+    metric-filter-hint: "Primerjajte cpu (%), memory (%), memoryUsage (bajti) ali prosti prostor v mounts."
+    metric-preview-hint: Napišite pogoj, da vidite, kako so vaši vsebniki trenutno.
+    metric-preview-note: Na podlagi zadnjih {duration} statistike, ki jo je zbral Dozzle.
+    metric-container: Vsebnik
+    metric-cpu: CPE
+    metric-memory: Pomnilnik
+    metric-window-match: Okno
+    metric-firing: Bi se sprožilo
+    metric-matching-now: Zdaj nad
+    metric-no-samples: Ni podatkov
+    metric-no-samples-hint: Za ustrezne vsebnike statistika še ni bila zbrana.
+    metric-would-fire: "Trenutno bi se sprožilo za 1 vsebnik | Trenutno bi se sprožilo za {count} vsebnikov"
+    metric-would-not-fire: Noben vsebnik trenutno ne presega praga
     sample-window-label: Vzorčno okno
-    sample-window-hint: "Opozorilo se sproži, ko je pogoj izpolnjen za {duration}"
+    sample-window-hint: "Sproži se, ko pogoj velja {duration}"
     cooldown-label: Čas mirovanja
     cooldown-hint: "{duration} med opozorili na zabojnik"
     no-cooldown: Brez časa mirovanja
+    immediate-label: "Pošlji takoj"
+    immediate-hint: "Vsako ujemanje dostavi takoj, brez pregleda Dozzle Cloud, do dnevne omejitve opozoril vašega paketa."
     alert-type: Vrsta opozorila
     log-alert: Opozorilo dnevnika
     metric-alert: Opozorilo metrike
     event-alert: Opozorilo o dogodku
-    event-filter: Izraz dogodka
-    event-fields-hint: "Polja na voljo: {fields}"
+    log-alert-description: Ujemanje vrstic v dnevnikih vsebnikov
+    metric-alert-description: Nadzor porabe CPE, pomnilnika in diska
+    event-alert-description: Odziv na zagone, zaustavitve in spremembe stanja
+    type-switch-warning: Shranjevanje bo zamenjalo pogoj {type} tega opozorila, ki bo izgubljen.
+    event-filter: Pogoj dogodka
+    event-filter-hint: Kateri dogodki vsebnikov sprožijo opozorilo.
+    event-matches: "Ustreza 1 od teh dogodkov | Ustreza {count} od teh dogodkov"
+    event-matches-none: Ne ustreza nobenemu od teh dogodkov
+    event-preview-hint: Napišite pogoj, da vidite, katere dogodke vsebnikov bi ujel.
+    event-preview-note: Vzorčni dogodki, ne zgodovina. Dogodki Dockerja se ovrednotijo, ko se zgodijo.
   destination-form:
     create-title: Dodaj Cilj
     edit-title: Uredi Cilj
     description: Kam naj se pošiljajo obvestila?
     name: Ime
     name-placeholder: npr., Produkcijski Slack
+    name-hint: Tako je ta cilj naveden pri izbiri cilja za opozorilo.
+    name-taken: To ime že uporablja drug cilj.
+    still-needed: "Še manjka: {fields}"
+    missing:
+      name: ime
+      url: URL webhooka
+      template: predloga
+    discard-title: Zavržem ta cilj?
+    discard-keep: Nadaljuj urejanje
+    discard-confirm: Zavrzi
     type: Tip
     webhook-title: HTTP Webhook
     webhook-description: Slack, Discord, končna točka po meri
@@ -352,21 +631,37 @@ notifications:
     cloud-description: Push obvestila, e-poštna opozorila in povzetki z umetno inteligenco
     webhook-url: URL Webhook
     webhook-url-placeholder: https://hooks.foo.com/services/...
+    webhook-url-invalid: Vnesite celoten naslov http:// ali https://.
     api-key: API Ključ
-    payload-format: Format Payload
+    payload-format: Vsebina
     format-slack: Slack
     format-discord: Discord
     format-ntfy: ntfy
     format-custom: Po meri
+    format-replace-warning: To bo zamenjalo predlogo, ki ste jo napisali.
+    format-replace-confirm: Zamenjaj
     template: Predloga
     template-hint: Sintaksa predloge Go
+    template-placeholder: Telo JSON z oznakami predloge Go
+    payload-mode-json: Veljaven JSON. Vsaka vrednost je izrisana in ubežno kodirana namesto vas.
+    payload-mode-raw: Ni JSON, zato je celotno telo poslano kot izrisano besedilo.
+    payload-mode-unbalanced: Nezaprt ukaz predloge.
+    payload-mode-empty: Prazna predloga pošlje celotno obvestilo kot JSON.
+    variables: Razpoložljive spremenljivke
+    variables-all: Vsa opozorila
+    variables-log: Samo opozorila dnevnika
+    variables-metric: Samo opozorila metrik
+    variables-event: Samo opozorila dogodkov
+    variables-scope-hint: Polja zunaj »Vsa opozorila« so nastavljena samo za svojo vrsto opozorila; drugje uporabljena odpovejo pri pošiljanju.
     headers: Prilagojene Glave
     headers-hint: Neobvezne HTTP glave (npr. Authorization)
     header-name: Ime glave
     header-value: Vrednost glave
     add-header: Dodaj Glavo
+    remove-header: Odstrani glavo
     test: Test
     test-success: Test uspešen
+    test-unsupported: "Ta predloga ne deluje za opozorila {kinds}, zato ne bodo poslana sem."
     cancel: Prekliči
     close: Zapri
     save: Shrani
@@ -374,13 +669,10 @@ notifications:
     cloud-exists: Dozzle Cloud je že povezan
     link-cloud: Poveži Račun
     link-cloud-button: Poveži Dozzle Cloud
-    cloud-settings-hint: Za nastavitev upravljanih kanalov pojdite na
     cloud-settings-link: Nastavitve Dozzle Cloud
     cloud-checking: Preverjanje stanja oblaka...
     cloud-relink: Vaš API ključ je neveljaven ali potekel. Prosimo, izbrišite in ponovno povežite svoj račun.
     cloud-unavailable: Dozzle Cloud je začasno nedosegljiv. Poskusite znova pozneje.
-    cloud-plan: Načrt
-    cloud-usage: Dogodki v tem obdobju
   empty-state:
     title: Začnite z obvestili
     description: Izberite, kako želite prejemati opozorila, ko vaši zabojniki potrebujejo pozornost.
@@ -392,12 +684,20 @@ notifications:
 cloud:
   title: Dozzle Cloud
   description: Upravljajte svoje zabojnike na daljavo in uporabite UI za preiskovanje težav v vašem grozdu.
+  pitch:
+    findings: Dnevni pregled vaših napak in opozoril z UI
+    alerts: Opozorila v realnem času ob sesutjih in preseženih pragovih
+    control: Zaženite, ustavite in preglejte zabojnike od koder koli
   learn-more: Več o tem
   link-instance: Poveži instanco
   relink-instance: Ponovno poveži instanco
   connected: Povezano
+  pro-badge: Dozzle Cloud Pro
+  locked-on-this-plan: Na voljo z Dozzle Cloud Pro
   plan: Načrt
-  usage: Dogodki v tem obdobju
+  usage: Dogodki
+  usage-agent-messages: Klepeti z agentom
+  usage-log-bytes: Indeksirani podatki
   dashboard: Nadzorna plošča
   settings: Nastavitve
   error: Napaka povezave. Prosimo, ponovno povežite svojo instanco.
@@ -405,6 +705,7 @@ cloud:
   unlink: Prekini povezavo
   unlink-confirm: Ali ste prepričani, da želite prekiniti povezavo z Dozzle Cloud? To bo odstranilo vse cilje obvestil v oblaku.
   privacy:
+    details-link: "Kaj se pošilja"
     toggle: "Pretakanje dnevnikov in meritev v Dozzle Cloud"
     sends-heading: "Dokler je to vklopljeno, vaši vsebniki nenehno pošiljajo:"
     sends-logs: "Vrstice dnevnika, takoj ko so zapisane"
@@ -412,7 +713,7 @@ cloud:
     never-heading: "Nikoli ni poslano:"
     never-env: "Spremenljivke okolja"
     off-note: "Izklopite, da dnevniki in meritve ostanejo na tej instanci. Nastavljena opozorila se še vedno dostavljajo, oddaljen dostop do vsebnikov pa še naprej deluje."
-    per-container: "Posamezen vsebnik izključite z oznako: dev.dozzle.cloud.min_level=disabled"
+    per-container: "Ustavite dnevnike posameznega vsebnika z oznako: dev.dozzle.cloud.min_level=disabled"
     required-for: "Potrebno za preiskave z umetno inteligenco, iskanje po dnevnikih in zgodovino virov."
   welcome:
     watching-title: "Cloud spremlja vaše dnevnike, da vam ni treba"
@@ -440,10 +741,12 @@ cloud:
     alerts-go-to: "Opozorila gredo na"
     your-cloud-account: "vaš račun Cloud"
     change: "Spremeni"
+    chat-also: "Prejmite jih tudi na telefon v Telegramu ali Discordu."
+    chat-connect: "Poveži"
     turn-on: "Vklopi 1 opozorilo | Vklopi {count} opozoril"
     turn-on-short: "Vklopi"
     continue-without: "Nadaljuj brez opozoril"
-    skip-alerts: "Ne zdaj, pošiljajte samo dnevne ugotovitve"
+    skip-alerts: "Ne zdaj"
     ready: "Pripravljeno"
     done-title: "Vse je nastavljeno"
     done-body: "Tukaj se pojavi vsaka vrsta obvestila."
@@ -457,19 +760,101 @@ cloud:
     where-tuning: "Prilagajanje po vsebnikih"
     where-tuning-detail: "Zožite, utišajte ali izbrišite katerokoli pravilo na strani Obvestila."
     done: "Končano"
+    steps:
+      watching: "Kaj naredi Cloud"
+      alerts: "Opozorila v realnem času"
+      done: "Kje se vse prikaže"
     signals:
       exited: "Vsebnik se je končal z napako"
       unhealthy: "Vsebnik je postal unhealthy"
       oom: "Ubit s strani jedra (OOM)"
       restart: "Vsebnik ponovno zagnan"
+      updated: "Dozzle je posodobil vsebnik"
       cpu: "CPU nad 90% pet minut"
       memory: "Pomnilnik nad 90% pet minut"
       disk: "Nosilec več kot 85% poln"
       disk-free: "Nosilec z manj kot 1 GB prostora"
       fatal: "Katerakoli vrstica fatal"
       error: "Katerakoli vrstica error"
+cloud-rail:
+  title: Dozzle Cloud
+  chat: Vprašaj Dozzle
+  metrics: Meritve
+  alerts: Opozorila
+  close: Zapri
+  hide: Skrij oblačno vrstico
+  show: Pokaži oblačno vrstico
+  alerts-empty-here: Za to, kar gledate, se ni sprožilo nič.
+  all-activity: Vsa dejavnost
+  metrics-no-container: Odprite vsebnik, da vidite njegovo zgodovino.
+  metrics-loading: Nalagam zgodovino…
+  metrics-failed: Zgodovine ni bilo mogoče naložiti.
+  metrics-empty: Za to obdobje še ni zapisov.
+  metrics-peak: vrh
+  metrics-bucket: povprečja po {duration}
+  window-1h: 1 h
+  window-6h: 6 h
+  window-24h: 24 h
+  window-7d: 7 d
+cloud-chat:
+  title: Vprašaj Dozzle
+  close: Zapri
+  clear: Počisti klepet
+  empty: Vprašaj o tem, kar gledaš. Pomočnik vidi ta pogled in bere te dnevnike.
+  thinking: Razmišljam…
+  doing:
+    logs: Berem dnevnike…
+    containers: Pregledujem vsebnike…
+    stats: Preverjam porabo virov…
+    inspect: Pregledujem vsebnik…
+    notifications: Preverjam obvestila…
+    action: Izvajam dejanje…
+    working: Delam…
+  step:
+    logs: Iskanje po dnevnikih
+    containers: Pregled vsebnikov
+    stats: Preverjanje porabe virov
+    inspect: Pregledovanje vsebnika
+    alerts: Pregled opozoril
+    findings: Pregled ugotovitev
+    events: Preverjanje zgodovine vsebnika
+    docs: Branje dokumentacije
+    notifications: Preverjanje obvestil
+    action: Izvajanje dejanja
+  phase:
+    reading: Branje vprašanja
+    reviewing: Pregled najdenega
+    writing: Pisanje odgovora
+    retrying: Traja dlje kot običajno, ponoven poskus
+  found: "najdeno: {n}"
+  nothing-found: nič najdenega
+  worked-for: "Delo: {time}"
+  earlier: "prejšnjih: {n}"
+  placeholder: Vprašaj o teh dnevnikih
+  historical: zgodovinsko
+  n-containers: "Vsebnikov: {n}"
+  evidence: Poslano z vašim vprašanjem
+  lines-in-view: "{n} vidnih vrstic"
+  this-log: Ta vrstica dnevnika
+  remove-log: Odstrani to vrstico dnevnika
+  send: Pošlji
+  suggest-summarize: Povzemi, kaj se dogaja
+  suggest-errors: Poišči napake in opozorila
+  suggest-next: Kaj naj pogledam naslednje?
+  error-unavailable: Pomočnik trenutno ni na voljo.
+  error-not-configured: Dozzle Cloud ni povezan, zato ni pomočnika, ki bi ga vprašali.
+  section-ask: Pomočnik
+  ask-for: Vprašaj Dozzle o {query}
+  ask-hint: Odgovarja iz vsebnikov v pogledu
+  ask-shortcut: za vprašanje
 cloud-search:
   containers-section: "Vsebniki"
+  section-logs: "Dnevniki"
+  no-matches: "Ni ujemajočih se vsebnikov ali ukazov"
+  nav-hint: "krmarjenje"
+  pin-shortcut: "pripni stolpec"
+  merge-shortcut: "združi v tok"
+  unmerge-shortcut: "odstrani iz toka"
   search-logs-for: 'Iskanje dnevnikov za "{query}"'
   across-containers: "indeksirano po vseh vaših vsebnikih"
   connect-to-enable: "Povežite Dozzle Cloud za iskanje po dnevnikih"
@@ -477,27 +862,26 @@ cloud-search:
   open-container: "odpri vsebnik"
   search-logs-shortcut: "išči po dnevnikih"
   cloud-connected: "Cloud povezan"
+  cloud-error: "Napaka povezave s Cloud"
   results-page-title: "Iskanje dnevnikov"
   no-results: "Ni ujemajočih se vrstic dnevnika."
   search-failed: "Iskanje v Cloudu ni uspelo."
   search-empty-prompt: "Vpišite poizvedbo za iskanje po dnevnikih."
   searching: "Iskanje…"
   hits-count: "{n} zadetkov"
-  window-suffix: "v zadnjih 14 dneh"
+  window-since: "od {time}"
   hero-title-cloud: "Iskanje vsebnikov in dnevnikov"
   hero-title-plain: "Iskanje vsebnikov"
   hero-pill-indexed: "Cloud indeks"
   modal-placeholder-cloud: "Iskanje vsebnikov in dnevnikov…"
   modal-placeholder-plain: "Iskanje vsebnikov…"
-  col-time: "Čas"
-  col-level: "Raven"
-  col-container: "Vsebnik"
-  col-message: "Sporočilo"
   container-removed: "Vsebnik je bil izbrisan"
   cta-settings: "Nastavitve Cloud"
   container-removed-pill: "izbrisano"
 command-palette:
   section-commands: Ukazi
+  section-recent: "Nedavno"
+  run-hint: "izvedi ukaz"
   restart-container: Znova zaženi {name}
   stop-container: Ustavi {name}
   start-container: Zaženi {name}
@@ -512,3 +896,349 @@ command-palette:
   toggle-std: Preklopi oznake stdout/stderr
   toggle-scrollbars: Preklopi manjše drsnike
   open-settings: Odpri nastavitve
+  section-updates: "Na voljo so posodobitve"
+  section-hosts: "Gostitelji"
+  open-analytics: "Odpri analizo dnevnikov"
+  clear-logs: "Počisti dnevnike"
+  attach-shell: "Priključi se na {name}"
+  exec-shell: "Odpri lupino v {name}"
+  open-assistant: "Vprašaj pomočnika"
+  check-container-updates: "Preveri posodobitve za {name}"
+  skip-update: "Preskoči to posodobitev za {name}"
+  review-updates: "Preglej posodobitve: 1 | Preglej posodobitve: {count}"
+  confirm-stop: "Znova pritisnite ↵, da ustavite {name}"
+  confirm-update: "Znova pritisnite ↵, da posodobite {name}"
+  confirm-hint: "potrdi"
+  open-settings-page: "Nastavitve: {page}"
+  open-notifications: "Odpri obvestila"
+  open-logs: "Odpri dnevnike"
+  state-on: "Vklopljeno"
+  state-off: "Izklopljeno"
+  prefix-commands: "ukazi"
+  prefix-hosts: "gostitelji"
+  prefix-ask: "vprašaj"
+  actions-hint: "dejanja"
+  actions-placeholder: "Filtriraj dejanja…"
+  back-hint: "nazaj"
+setup:
+  title: Nastavitev Dozzle
+  next: Naprej
+  back: Nazaj
+  finish-later: Dokončaj pozneje
+  close: Zapri
+  copy: Kopiraj
+  steps:
+    login: Prijava
+    login-note: To naredite najprej
+    actions: Dejanja in lupina
+    cloud: Dozzle Cloud
+    cloud-note: Neobvezno
+    hosts: "Gostitelji"
+    hosts-note: "Neobvezno"
+    update: "Samodejna posodobitev"
+    update-note: "Potrebuje dejanja"
+    restart: Ponovni zagon
+  login:
+    title: Vklopi prijavo
+    subtitle: Kdorkoli, ki lahko doseže Dozzle, lahko bere vaše dnevnike. Pred vsem drugim omejite dostop.
+    no-data-title: /data ni priklopljen
+    no-data-body: Uporabniki in nastavitve se shranijo v /data. Brez nosilca izginejo, ko je vsebnik naslednjič znova ustvarjen. Priklopite nosilec in preverite znova.
+    check-again: Preveri znova
+    tab-account: Račun Dozzle
+    tab-proxy: Moj posrednik
+    tab-oidc: OIDC
+    username: Uporabniško ime
+    email: E-pošta
+    optional: (neobvezno)
+    password: Geslo
+    confirm: Potrdi geslo
+    password-hint: Vsaj 8 znakov. V uporabniškem imenu so dovoljene črke, številke, pike, vezaji in podčrtaji.
+    mismatch: Gesli se ne ujemata.
+    saved-volume: Shranjeno na priklopljen nosilec
+    after-restart: Prijava se vklopi po ponovnem zagonu
+    on: Prijava je vklopljena
+    users-exist: Datoteka users.yml že obstaja. Za njeno uporabo nastavite ponudnika overjanja na simple.
+    create-account: Ustvari račun
+    proxy-body: Authelia, Authentik, Cloudflare Access in podobni prijavijo uporabnike, nato pa uporabniško ime posredujejo Dozzle v glavi Remote-User.
+    proxy-warning-title: Objavite samo posrednika
+    proxy-warning-body: Dozzle tej glavi zaupa ne glede na pošiljatelja. Če so vrata Dozzle dosegljiva neposredno, se lahko kdorkoli izdaja za kateregakoli uporabnika.
+    proxy-docs: Vodnik za forward proxy
+    use-proxy: Uporabi mojega posrednika
+    oidc-body: OIDC potrebuje skrivnost odjemalca, zato se tukaj nič ne shrani. Dodajte to v datoteko compose in znova ustvarite vsebnik.
+    oidc-docs: Vodnik za OpenID Connect
+    skip: "Nadaljuj brez prijave"
+    manual-restart: Dozzle se tukaj ne more sam znova zagnati. Znova zaženite vsebnik, da vklopite prijavo, ali to nastavite v datoteki compose.
+    restart-hint: Pristali boste na strani za prijavo. Nastavitev se nadaljuje po prijavi.
+  actions:
+    title: Dejanja in lupina
+    subtitle: Odločite, kaj sme Dozzle početi z vašimi vsebniki.
+    example-status: Končan (1) pred 2 minutama
+    example-restart: Znova zaženi
+    example: "Primer"
+    actions-label: Zagon, ustavitev in ponovni zagon
+    actions-desc: Popravite sesut vsebnik kar na strani, kjer ste našli napako.
+    shell-label: Lupina
+    shell-desc: Priključite se na vsebnik ali v njem izvajajte ukaze.
+    shell-warning: Dostop do lupine vsebnika je pogosto enakovreden dostopu do gostitelja. Pustite izklopljeno, razen če ga potrebujete.
+    locked: "Nastavljeno z {env}"
+    window-closed: "Brez prijave nastavitev sprejema spremembe samo v prvih 15 minutah nove namestitve. To nastavite z okoljskimi spremenljivkami ali najprej vklopite prijavo."
+    window-closed-env: "Brez prijave nastavitev sprejema spremembe samo v prvih 15 minutah nove namestitve. Nastavite {envs} v datoteki compose ali najprej vklopite prijavo."
+    no-access: Vaš račun ne more spreminjati teh nastavitev.
+    restart-note: Spremembe začnejo veljati po ponovnem zagonu Dozzle.
+  hosts:
+    title: "Dodaj drugega gostitelja"
+    subtitle: "Oglejte si vsebnike na drugih računalnikih iz tega Dozzla. Na vsakem zaženite agenta in tukaj dodajte njegov naslov."
+    run-title: "Zaženite agenta"
+    run-body: "Na drugem računalniku to dodajte v datoteko compose in jo zaženite. Vrata 7007 naj ostanejo v zasebnem omrežju."
+    custom-cert: "Ta Dozzle uporablja lastno potrdilo, zato agent potrebuje enak par, sicer bo povezavo zavrnil."
+    cert-docs: "Vodnik po potrdilih"
+    connect-title: "Povežite se"
+    address: "Naslov"
+    name: "Ime"
+    optional: "(neobvezno)"
+    add: "Dodaj gostitelja"
+    connect-note: "Dozzle se poveže, preden shrani. Gostitelj se prikaže takoj, brez ponovnega zagona."
+    added: "{name} je povezan."
+    list-title: "Agenti"
+    connected: "Povezan"
+    offline: "Ni povezan"
+    remove: "Odstrani"
+    skip: "Ne zdaj"
+    error-exists: "Ta agent je že dodan."
+    error-duplicate: "Ta naprava je že povezana kot drug gostitelj. Če ta agent uporablja isti Docker engine, mu nastavi lasten DOZZLE_HOST_ID."
+    error-connect: "Povezava z agentom ni uspela: {reason}"
+    error-cert: "Agent ima drugačno potrdilo kot ta Dozzle. Znova kopiraj izsek, posodobi agenta in ga ustvari na novo."
+    error-cert-custom: "Agent nima lastnega potrdila tega Dozzla. Agentu daj iste datoteke potrdila in ključa ter ga ustvari na novo."
+    error-unsupported-mode: "V tem načinu tukaj ni mogoče dodajati ali odstranjevati gostiteljev."
+    error-invalid: "Ta naslov ali ime ni veljavno."
+    error-rate-limited: "Preveč poskusov. Počakaj minuto in poskusi znova."
+    error-env-agent: "Ta agent je nastavljen z DOZZLE_REMOTE_AGENT, zato ga je mogoče odstraniti samo tam."
+    error-not-found: "Tega agenta ni več na seznamu."
+    error-custom-cert: "Ta Dozzle že uporablja lastno potrdilo, zato zasebnega potrdila ni treba ustvariti."
+    private-label: "Zasebno potrdilo"
+    private-desc: "Z agentom se lahko poveže samo ta Dozzle. Drugi agenti ostanejo nespremenjeni."
+    private-warning: "Ta izrezek vsebuje zasebni ključ. Z njim ravnajte kot z geslom."
+    private-pill: "zasebno"
+    private-error: "Zasebnega potrdila ni bilo mogoče ustvariti, zato se uporablja skupno. {reason}"
+    private-missing: "Ta Dozzle še nima zasebnega potrdila. Znova vklopite Zasebno potrdilo in poskusite znova."
+  cloud:
+    title: Poveži Dozzle Cloud
+    subtitle: Izvedite, ko se kaj pokvari, ne da bi imeli odprt zavihek.
+    alerts-title: Opozorila v trenutku, ko se kaj pokvari
+    alerts-body: "Sesutja, prekinitve zaradi OOM in porasti napak, poslani na Telegram, Discord, Slack ali e-pošto."
+    chat-title: "Vprašajte s telefona, kaj se je pokvarilo"
+    chat-body: "Pišite botu v Telegramu ali Discordu. Prebere vaše dnevnike in, ko so dejanja vklopljena, po vaši potrditvi ponovno zažene vsebnik."
+    updates-title: "Posodobitve, ki so preverjene"
+    updates-body: "Po vsaki samodejni posodobitvi Dozzle Cloud primerja napake s tistimi od prej in ponudi povrnitev, če se je stanje poslabšalo."
+    connect: Poveži Dozzle Cloud
+    learn-more: Več o tem
+    skip: "Ne zdaj"
+  update:
+    pill-on: "Uporablja dejanja · vklopljeno"
+    pill-pending: "Vklopi se z dejanji"
+    title: "Ohranjajte vsebnike posodobljene"
+    subtitle: "Ob mirni uri Dozzle poišče novejše slike ter posodobi sebe in vsebnike, ki jih izberete. Nastavitve, uporabniki in opozorila ostanejo."
+    auto-label: "Posodabljaj samodejno"
+    auto-desc: "Preveri, ali obstajajo novejše slike, in posodobi Dozzle ter spodnje vsebnike, ko obstajajo."
+    when-label: "Kdaj"
+    time-label: "Čas"
+    server-time: "Uporablja časovni pas strežnika."
+    daily: "Dnevno"
+    weekly: "Tedensko ob nedeljah"
+    version-label: "Različica"
+    update-now: "Posodobi zdaj"
+    pulling: "Prenašanje nove slike"
+    up-to-date: "Dozzle je že posodobljen."
+    restarting: "Dozzle se zamenjuje z novo različico."
+    restarting-hint: "Stran se znova naloži, takoj ko se nova različica odzove."
+    needs-actions: "Posodobi zdaj deluje, ko so dejanja vklopljena, po ponovnem zagonu."
+    reason-pinned-tag: "Uporabljaš pripeto oznako različice, zato ni ničesar novejšega za prenos. Za posodobitve uporabi oznako, kot je latest."
+    reason-unsupported: "Dozzle tukaj ne najde svojega vsebnika, zato se ne more zamenjati sam."
+    reason-swarm-worker: "Dozzle teče kot storitev Swarm na delovnem vozlišču. Storitev lahko posodobi samo upravitelj, zato Dozzle zaženite na upravitelju ali ga posodobite z docker service update."
+    pull-denied: "{image} ni bilo mogoče prenesti. Morda obstaja samo na tem računalniku ali register zahteva docker login."
+  restart:
+    title: Znova zaženi Dozzle
+    subtitle: Spremembe so shranjene in začnejo delovati po ponovnem zagonu.
+    change-auth: Prijava
+    "on": "Vklopljeno"
+    "off": "Izklopljeno"
+    button: Znova zaženi Dozzle
+    restarting: Ponovni zagon Dozzle
+    restarting-hint: Stran se osveži, takoj ko je Dozzle spet na voljo.
+    slow-title: To traja dlje kot običajno
+    slow-body: Dozzle še ni spet na voljo. Preverite vsebnik in nato osvežite stran.
+    reload: Osveži
+    manual: Dozzle se tukaj ne more sam znova zagnati. Znova zaženite vsebnik ali to nastavite v datoteki compose.
+    done-title: Vse je pripravljeno
+    done-body: Ponovni zagon ni potreben. K temu se lahko kadarkoli vrnete v nastavitvah.
+    nothing-title: "Ničesar ni treba znova zagnati"
+    nothing-body: "Tokrat ni bil nastavljen noben korak. Nastavitev odprite v Nastavitvah, ko boste pripravljeni."
+    done: Končano
+  error:
+    generic: Nekaj je šlo narobe. Poskusite znova.
+    load: Nastavitve ni bilo mogoče naložiti. Poskusite pozneje.
+    conflict: To je že nastavljeno ali določeno z okoljsko spremenljivko.
+    no-data: /data ni priklopljen, zato tega ni mogoče shraniti.
+    window-closed: "Brez prijave nastavitev sprejema spremembe samo v prvih 15 minutah nove namestitve. Prijavo namesto tega vklopite z okoljskimi spremenljivkami."
+mcp-authorize:
+  title: "Avtoriziraj odjemalca MCP"
+  subtitle: "{client} želi uporabljati Dozzle v vašem imenu."
+  unnamed-client: "Neimenovan odjemalec"
+  redirect-label: "Vas vrne na"
+  access-label: "Dostop"
+  access-value: "Branje vsebnikov, dnevnikov in statistike"
+  user-label: "Prijavljeni kot"
+  hint: "Dovolite le odjemalca, ki ste ga pravkar povezali sami, in preverite, ali je zgornji naslov pričakovan."
+  allow: "Dovoli"
+  deny: "Zavrni"
+  return: "Nazaj na odjemalca"
+  redirecting: "Vračanje na odjemalca. Ko se konča, lahko ta zavihek zaprete."
+  failed: "Zahteve ni bilo mogoče dokončati."
+mobile-nav:
+  label: "Glavni meni"
+  home: "Domov"
+  browse: "Brskaj"
+  back: "Nazaj"
+time-range:
+  title: "Časovni razpon"
+  live: "V živo"
+  last-15m: "Zadnjih 15 minut"
+  last-1h: "Zadnja ura"
+  last-6h: "Zadnjih 6 ur"
+  last-24h: "Zadnjih 24 ur"
+  custom: "Razpon po meri"
+  from: "Od"
+  to: "Do"
+  keep-following: "Spremljaj naprej"
+  volume: "Količina dnevnikov"
+  errors: "Napake"
+  bucket: "Vrstice: {lines} · napake: {errors}"
+  not-scanned: "ni prebrano"
+  invalid: "Konec mora biti za začetkom."
+  show: "Prikaži dnevnike"
+  edge-start: "Od"
+  edge-end: "Do"
+  show-earlier: "prikaži prej"
+  show-later: "prikaži pozneje"
+  to-now: "do zdaj"
+  shift-earlier: "Prejšnje okno"
+  shift-later: "Naslednje okno"
+  last-short: "Zadnjih {span}"
+  since-short: "Od {time}"
+  custom-hint: "Izberi dneve, nato ure. Časi so v {zone}."
+  keep-following-hint: "Pusti konec odprt in še naprej prikazuj nove vrstice."
+  previous-month: "Prejšnji mesec"
+  next-month: "Naslednji mesec"
+  empty-range: "V tem razponu ni dnevnikov"
+  empty-range-hint: "Med {from} in {to} ni bilo zapisano nič."
+  empty-since: "Ni dnevnikov od {time}"
+  empty-since-hint: "Nove vrstice se prikažejo tukaj takoj, ko so zapisane."
+  jump-before: "Prejšnje vrstice · {time}"
+  jump-after: "Poznejše vrstice · {time}"
+  empty-window: "V tem oknu ni dnevnikov"
+update-marker:
+  updated: "Posodobljeno"
+  rolled-back: "Povrnjeno"
+  undone: "Posodobitev razveljavljena"
+  roll-back: "Povrni"
+  by:
+    schedule: "po urniku samodejnih posodobitev"
+    dozzle: "iz Dozzle"
+    cloud: "iz Dozzle Cloud"
+  verdict:
+    pending: "Dozzle Cloud spremlja to posodobitev"
+    clean: "Videti je v redu"
+    regressed: "Videti je pokvarjeno"
+    unsure: "Morda ima težavo"
+    rolled_back_by_dozzle: "Dozzle je obnovil prejšnji vsebnik"
+  decision:
+    rolled_back: "Povrnjeno"
+    kept: "Obdržano"
+auto-update:
+  which-label: "Kateri vsebniki"
+  mode-off: "Samo Dozzle"
+  mode-off-desc: "Drugi vsebniki se preverijo in počakajo, da jih posodobite."
+  mode-all: "Vse"
+  risky: "{count} vsebnik hrani podatke v poimenovanem nosilcu. Baza podatkov lahko preide na različico, ki njenih podatkov ne zna prebrati. | Vsebniki s podatki v poimenovanih nosilcih: {count}. Baza podatkov lahko preide na različico, ki njenih podatkov ne zna prebrati."
+  containers-still: "Drugi vsebniki se še vedno posodabljajo po tem urniku."
+  needs-actions: "Dokler so dejanja vsebnikov izklopljena, se nič ne posodobi samo."
+  containers: "Vsebniki"
+  status-current: "Posodobljen"
+  status-available: "Na voljo je posodobitev"
+  status-pending: "Še ni preverjen"
+  status-off: "Ni preverjen"
+  status-pinned: "Pripet na digest"
+  status-local: "Zgrajen lokalno"
+  status-private: "Zasebni register"
+  status-unknown: "Ni mogoče preveriti"
+  safety-title: "Varnostna mreža"
+  safety-verify: "Vsaka posodobitev se spremlja in razveljavi, če novi vsebnik odpove."
+  safety-cleanup: "Stara slika se nato odstrani. Ena prejšnja slika ostane za povrnitev."
+  safety-skip: "Slike, pripete na digest, zgrajene lokalno ali iz zasebnega registra brez prijave, se preskočijo."
+  learn-more: "Kako deluje samodejno posodabljanje"
+  footnote: "{link} določa, kateri vsebniki se posodabljajo sami."
+  footnote-link: "Nastavitve → Posodobitve"
+  mode-labelled: "Vsebniki z oznako"
+  mode-labelled-desc: "Plus vsebniki z oznako {label}."
+  mode-all-desc: "Vsak vsebnik, razen tistih z oznako {label}."
+  risky-hint: "Vsebniku dodajte oznako {label}, da ga izključite."
+  empty: "Noben vsebnik se ne posodablja sam. Vsebniku dodajte oznako {label}, da ga vključite."
+inspect:
+  overview: "Pregled"
+  ports: "Vrata"
+  mounts: "Priklopi"
+  env: "Okolje"
+  labels: "Oznake"
+  id: "ID"
+  command: "Ukaz"
+  created: "Ustvarjeno"
+  started: "Zagnano"
+  finished: "Končano"
+  restart-policy: "Pravilo ponovnega zagona"
+  network: "Omrežje"
+  memory-limit: "Omejitev pomnilnika"
+  cpu-limit: "Omejitev CPU"
+  unlimited: "Neomejeno"
+  oom-killed: "Ustavljen zaradi OOM"
+  exit-code: "Izhod {code}"
+  restarts: "Ponovni zagoni: {count}"
+  show-value: "Pokaži vrednost"
+  hide-value: "Skrij vrednost"
+  env-hidden: "Vrednosti so skrite. Za branje je potreben dostop do lupine."
+  load-failed: "Podrobnosti vsebnika ni bilo mogoče naložiti."
+  networks: "Omrežja"
+  container-count: "1 vsebnik | {count} vsebnikov"
+  subnet: "Podomrežje"
+  gateway: "Prehod"
+  ip-usage: "Uporabljeni IP-ji"
+  connected-containers: "Povezani vsebniki"
+  this-container: "ta vsebnik"
+  driver: "Gonilnik"
+  scope: "Obseg"
+  driver-options: "Možnosti gonilnika"
+  mounted-by: "Priklopljeno v"
+  details-failed: "Podrobnosti ni bilo mogoče naložiti."
+  size: "Velikost"
+  mountpoint: "Točka priklopa"
+reclaim:
+  clean-up: "Počisti"
+  free-up: "Sprosti {size}"
+  confirm-title: "Sprostim {size} na {host}?"
+  cannot-undo: "Tega ni mogoče razveljaviti."
+  images-repull: "Ustavljen sklad bo ob naslednjem zagonu znova prenesel svoje slike."
+  volumes-warning: "Nosilci (1) hranijo podatke, ki jih trenutno ne uporablja noben zabojnik. Brisanje izbriše te podatke, na primer bazo podatkov, katere zabojnik je bil odstranjen. | Nosilci ({count}) hranijo podatke, ki jih trenutno ne uporablja noben zabojnik. Brisanje izbriše te podatke, na primer bazo podatkov, katere zabojnik je bil odstranjen."
+  volumes-confirm: "Razumem, izbriši nosilce"
+  delete: "Izbriši"
+  deleting: "Sproščam {size}…"
+  freed: "Sproščeno {size}"
+  failed: "Čiščenje ni uspelo"
+  agent-too-old: "Ta agent še ne zna čistiti. Posodobite ga na najnovejšo različico."
+  preview-note: "Čiščenje ob zagonu znova preveri, zato se izbriše tudi vse, kar se do takrat preneha uporabljati."
+  preview-failed: "Seznama ni bilo mogoče naložiti."
+  preview-agent-too-old: "Posodobite tega agenta, da vidite seznam."
+  enable-actions: "Omogočite dejanja vsebnikov, da lahko počistite od tukaj."
+  schedule-label: "Samodejno počisti"
+  scheduled-run: "Načrtovano čiščenje"
+  schedule-desc: "Neuporabljene slike, ustavljeni vsebniki in predpomnilnik gradnje na vseh gostiteljih. Nosilci se nikoli ne izbrišejo."
+  last-run: "Zadnji zagon je sprostil {size} {when}."
+  last-run-failed: "{count} gostitelja ni bilo mogoče počistiti, poglejte dnevnike. | {count} gostiteljev ni bilo mogoče počistiti, poglejte dnevnike."

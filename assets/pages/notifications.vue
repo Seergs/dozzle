@@ -1,102 +1,131 @@
 <template>
   <PageWithLinks>
     <section>
-      <!-- Header -->
-      <div class="mb-8">
+      <div class="mb-6">
         <h2 class="text-2xl font-bold">{{ $t("notifications.title") }}</h2>
         <p class="text-base-content/60">{{ $t("notifications.description") }}</p>
       </div>
 
-      <!-- Destinations Section -->
-      <div class="mb-8">
-        <h3 class="text-base-content/60 mb-4 font-semibold tracking-wide uppercase">
-          {{ $t("notifications.destinations") }}
-        </h3>
-
-        <template v-if="dispatchers.length === 0">
-          <p class="text-base-content/60 mb-4 text-sm">{{ $t("notifications.empty-state.description") }}</p>
-          <button
-            class="card card-border border-base-content/30 hover:border-base-content/50 w-full cursor-pointer border-dashed transition-colors md:w-72"
-            @click="openAddDestination"
-          >
-            <div class="card-body items-center justify-center gap-1 p-4">
-              <mdi:plus class="text-2xl" />
-              <span class="text-base-content/60 text-sm">{{ $t("notifications.add-destination") }}</span>
-            </div>
-          </button>
-        </template>
-
-        <template v-else>
-          <div class="flex flex-wrap gap-4">
-            <DestinationCard
-              v-for="dest in dispatchers"
-              :key="dest.id"
-              :destination="dest"
-              :on-updated="fetchAll"
-              :existing-dispatchers="dispatchers"
-              class="w-full md:w-72"
-            />
-            <!-- Add Destination Card -->
-            <button
-              class="card card-border border-base-content/30 hover:border-base-content/50 w-full cursor-pointer border-dashed transition-colors md:w-72"
-              @click="openAddDestination"
-            >
-              <div class="card-body items-center justify-center gap-1 p-4">
-                <mdi:plus class="text-2xl" />
-                <span class="text-base-content/60 text-sm">{{ $t("notifications.add-destination") }}</span>
-              </div>
-            </button>
-          </div>
-        </template>
+      <!--
+        Three surfaces, one page. Stacked they made a page nobody reaches the
+        bottom of, and the rules you came to edit sat between a destination
+        picker and a history you were not looking for. Tabs also give the bell
+        somewhere to point: a new alert opens the history directly.
+      -->
+      <div role="tablist" class="tabs tabs-border border-base-content/10 mb-6 border-b">
+        <button
+          v-for="entry in tabs"
+          :key="entry.id"
+          role="tab"
+          class="tab gap-2"
+          :class="{ 'tab-active': tab === entry.id }"
+          @click="selectTab(entry.id)"
+        >
+          {{ entry.label }}
+          <span v-if="entry.count !== undefined" class="text-base-content/40 font-mono text-xs">
+            {{ entry.count }}
+          </span>
+          <span v-if="entry.dot" class="bg-warning size-1.5 rounded-full"></span>
+        </button>
       </div>
 
-      <!-- Alerts Section -->
-      <div>
-        <div class="mb-4">
-          <h3 class="text-base-content/60 font-semibold tracking-wide uppercase">{{ $t("notifications.alerts") }}</h3>
+      <!-- ACTIVITY -->
+      <AlertHistory v-if="tab === 'activity'" />
+
+      <!-- ALERTS -->
+      <template v-else-if="tab === 'alerts'">
+        <!-- With nothing to list, the button is the whole page, so it sits under the
+             sentence that explains it instead of alone at the far edge. -->
+        <EmptyState v-if="!alerts.length" :title="$t('notifications.no-alerts')">
+          <template #icon><mdi:bell-outline class="size-5" /></template>
+          <template #actions>
+            <button class="btn btn-primary btn-sm" @click="openCreateAlert">
+              <mdi:plus class="size-4" />
+              {{ $t("notifications.add-alert") }}
+            </button>
+          </template>
+        </EmptyState>
+
+        <div v-else class="mb-4 flex flex-wrap items-center gap-3">
+          <!-- Nothing to filter until there is more than one alert. -->
+          <div v-if="alerts.length > 1" role="tablist" class="tabs tabs-box tabs-xs">
+            <button
+              v-for="option in filters"
+              :key="option.id"
+              role="tab"
+              class="tab"
+              :class="{ 'tab-active': filter === option.id }"
+              @click="filter = option.id"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+          <button class="btn btn-primary btn-sm ml-auto" @click="openCreateAlert">
+            <mdi:plus class="size-4" />
+            {{ $t("notifications.add-alert") }}
+          </button>
         </div>
 
-        <!-- Filter Tabs -->
-        <div class="tabs tabs-box mb-6">
-          <button class="tab" :class="{ 'tab-active': filter === 'all' }" @click="filter = 'all'">
-            {{ $t("notifications.filter.all", { count: alerts.length }) }}
-          </button>
-          <button class="tab" :class="{ 'tab-active': filter === 'enabled' }" @click="filter = 'enabled'">
-            {{ $t("notifications.filter.enabled", { count: enabledCount }) }}
-          </button>
-          <button class="tab" :class="{ 'tab-active': filter === 'paused' }" @click="filter = 'paused'">
-            {{ $t("notifications.filter.paused", { count: pausedCount }) }}
-          </button>
-        </div>
-
-        <!-- Alerts List -->
-        <div class="space-y-4">
+        <div v-if="alerts.length" class="space-y-4">
+          <p v-if="!filteredAlerts.length" class="text-base-content/60 text-sm">
+            {{ $t("notifications.no-alerts-in-filter") }}
+          </p>
           <AlertCard
             v-for="alert in filteredAlerts"
             :key="alert.id"
             :alert="alert"
+            :dispatchers="dispatchers"
             :on-updated="fetchAlerts"
             :highlight="alert.id === highlightId"
           />
-          <button
-            class="card card-border border-base-content/30 hover:border-base-content/50 w-full cursor-pointer border-dashed transition-colors"
-            @click="openCreateAlert"
-          >
-            <div class="card-body items-center justify-center gap-1 p-4">
-              <mdi:plus class="text-2xl" />
-              <span class="text-base-content/60 text-sm">{{ $t("notifications.add-alert") }}</span>
-            </div>
+        </div>
+      </template>
+
+      <!-- DESTINATIONS -->
+      <template v-else>
+        <EmptyState
+          v-if="!dispatchers.length"
+          :title="$t('notifications.empty-state.title')"
+          :hint="$t('notifications.empty-state.description')"
+        >
+          <template #icon><mdi:send-outline class="size-5" /></template>
+          <template #actions>
+            <button class="btn btn-primary btn-sm" @click="openAddDestination">
+              <mdi:plus class="size-4" />
+              {{ $t("notifications.add-destination") }}
+            </button>
+          </template>
+        </EmptyState>
+
+        <div v-else class="mb-4 flex flex-wrap items-center gap-3">
+          <button class="btn btn-primary btn-sm ml-auto" @click="openAddDestination">
+            <mdi:plus class="size-4" />
+            {{ $t("notifications.add-destination") }}
           </button>
         </div>
-      </div>
+
+        <div
+          v-if="dispatchers.length"
+          class="border-base-content/15 bg-base-200/40 divide-base-content/10 divide-y rounded-lg border"
+        >
+          <DestinationCard
+            v-for="dest in dispatchers"
+            :key="dest.id"
+            :destination="dest"
+            :on-updated="fetchAll"
+            :existing-dispatchers="dispatchers"
+            :used-by="alertsPerDispatcher.get(dest.id) ?? []"
+          />
+        </div>
+      </template>
     </section>
   </PageWithLinks>
 </template>
 
 <script lang="ts" setup>
 import type { NotificationRule, Dispatcher } from "@/types/notifications";
-import AlertForm from "@/components/Notification/AlertForm.vue";
-import DestinationForm from "@/components/Notification/DestinationForm.vue";
+import AlertForm from "@/components/notifications/AlertForm.vue";
+import DestinationForm from "@/components/notifications/DestinationForm.vue";
 
 const { t } = useI18n();
 const showDrawer = useDrawer();
@@ -106,6 +135,49 @@ const route = useRoute();
 // State
 const alerts = ref<NotificationRule[]>([]);
 const dispatchers = ref<Dispatcher[]>([]);
+
+type Tab = "activity" | "alerts" | "destinations";
+const { linked: cloudLinked } = useCloudSurface();
+const { unseen: unseenAlerts, markAlertsSeen } = useRecentAlerts();
+
+// What happened, then the rules that made it happen, then where it goes. Only
+// Cloud remembers an alert past the refresh that dropped it out of the log
+// stream, so an unlinked instance has no history at all and the tab is gone
+// rather than empty — a webhook or an email destination never fills it.
+const defaultTab = computed<Tab>(() => (cloudLinked.value ? "activity" : "alerts"));
+
+// The tab lives in the URL so a bookmark and the back button land where the
+// reader left off. Only when it differs from the default, so the plain
+// /notifications link the bell uses stays plain.
+const tab = computed<Tab>(() => {
+  const value = route.query.tab;
+  // ?tab=activity is a link someone kept from when this instance was linked, or
+  // a bell that fired before it was unlinked. There is no tab to land on now.
+  if (value === "activity") return cloudLinked.value ? "activity" : defaultTab.value;
+  return value === "alerts" || value === "destinations" ? value : defaultTab.value;
+});
+
+function queryForTab(next: Tab) {
+  return next === defaultTab.value ? undefined : next;
+}
+
+function selectTab(next: Tab) {
+  router.replace({ query: { ...route.query, tab: queryForTab(next) } });
+}
+
+const tabs = computed(() => [
+  ...(cloudLinked.value
+    ? [{ id: "activity" as const, label: t("notifications.history.title"), dot: unseenAlerts.value }]
+    : []),
+  { id: "alerts" as const, label: t("notifications.alerts"), count: alerts.value.length },
+  { id: "destinations" as const, label: t("notifications.destinations"), count: dispatchers.value.length },
+]);
+
+// Reading the history is what clears the bell, so it happens on arrival and
+// again when the rows land — the fetch usually finishes after the tab opens.
+watchEffect(() => {
+  if (tab.value === "activity" && unseenAlerts.value) markAlertsSeen();
+});
 
 async function fetchAlerts() {
   const res = await fetch(withBase("/api/notifications/rules"));
@@ -129,7 +201,7 @@ function consumeHighlight(value: unknown) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return false;
   highlightId.value = parsed;
-  router.replace({ query: {} });
+  router.replace({ query: { tab: queryForTab("alerts") } });
   showToast(
     {
       type: "info",
@@ -142,7 +214,7 @@ function consumeHighlight(value: unknown) {
 
 function consumeAction(action: unknown) {
   if (action !== "create-alert") return;
-  router.replace({ query: {} });
+  router.replace({ query: { tab: queryForTab("alerts") } });
   openCreateAlertPrefilled();
 }
 
@@ -174,6 +246,24 @@ const filter = ref<"all" | "enabled" | "paused">("all");
 const enabledCount = computed(() => alerts.value.filter((a) => a.enabled).length);
 const pausedCount = computed(() => alerts.value.filter((a) => !a.enabled).length);
 
+const filters = computed(() => [
+  { id: "all" as const, label: t("notifications.filter.all", { count: alerts.value.length }) },
+  { id: "enabled" as const, label: t("notifications.filter.enabled", { count: enabledCount.value }) },
+  { id: "paused" as const, label: t("notifications.filter.paused", { count: pausedCount.value }) },
+]);
+
+// Deleting a destination orphans the alerts pointing at it, so each row lists them.
+const alertsPerDispatcher = computed(() => {
+  const byId = new Map<number, NotificationRule[]>();
+  for (const alert of alerts.value) {
+    if (!alert.dispatcher) continue;
+    const list = byId.get(alert.dispatcher.id) ?? [];
+    list.push(alert);
+    byId.set(alert.dispatcher.id, list);
+  }
+  return byId;
+});
+
 const filteredAlerts = computed(() => {
   if (filter.value === "enabled") return alerts.value.filter((a) => a.enabled);
   if (filter.value === "paused") return alerts.value.filter((a) => !a.enabled);
@@ -192,6 +282,7 @@ function openCreateAlertPrefilled() {
       onCreated: fetchAlerts,
       prefill: {
         name: t("notifications.prefill-name"),
+        alertType: "log" as const,
         logExpression: t("notifications.prefill-expression"),
         ...(cloudDispatcher ? { dispatcherId: cloudDispatcher.id } : {}),
       },

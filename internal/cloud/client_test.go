@@ -2,13 +2,20 @@ package cloud
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/amir20/dozzle/internal/container"
-	container_support "github.com/amir20/dozzle/internal/support/container"
 	pb "github.com/amir20/dozzle/proto/cloud"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 func TestNewClient_DefaultURL(t *testing.T) {
@@ -48,7 +55,7 @@ func TestHandleRequest_ListTools(t *testing.T) {
 	assert.Equal(t, "req-1", resp.RequestId)
 	listResp := resp.GetListTools()
 	assert.NotNil(t, listResp)
-	assert.Len(t, listResp.Tools, 17) // base 9 (incl. list_notifications) + 3 actions + remove_container + update + 3 create_*_notification
+	assert.Len(t, listResp.Tools, 20) // base 11 (incl. list_notifications, retro_scan, inspect_containers) + 3 actions + remove_container + update + rollback + 3 create_*_notification
 }
 
 func TestHandleRequest_ListTools_ActionsDisabled(t *testing.T) {
@@ -66,7 +73,7 @@ func TestHandleRequest_ListTools_ActionsDisabled(t *testing.T) {
 	resp := client.handleRequest(context.Background(), req)
 
 	listResp := resp.GetListTools()
-	assert.Len(t, listResp.Tools, 9) // base tools including list_notifications
+	assert.Len(t, listResp.Tools, 11) // base tools including list_notifications and inspect_containers
 }
 
 func TestHandleRequest_CallTool_ListContainers(t *testing.T) {
@@ -128,7 +135,7 @@ func TestHandleRequest_CallTool_RestartContainer(t *testing.T) {
 	mockClient := &MockClientService{}
 	mockClient.On("ContainerAction", mock.Anything, mock.Anything, container.Restart).Return(nil)
 
-	cs := container_support.NewContainerService(mockClient, container.Container{ID: "abc123", Name: "nginx", Host: "local"})
+	cs := container.NewContainerService(mockClient, container.Container{ID: "abc123", Name: "nginx", Host: "local"})
 
 	mockHost := &MockHostService{}
 	withResolver(mockHost, container.Container{ID: "abc123", Name: "nginx", Host: "local"})
@@ -153,4 +160,29 @@ func TestHandleRequest_CallTool_RestartContainer(t *testing.T) {
 	callResp := resp.GetCallTool()
 	assert.True(t, callResp.Success)
 	mockClient.AssertCalled(t, "ContainerAction", mock.Anything, mock.Anything, container.Restart)
+}
+
+func TestRetryDelay(t *testing.T) {
+	withRetry := func(code codes.Code, d time.Duration) error {
+		st, err := status.New(code, "paused").WithDetails(&errdetails.RetryInfo{RetryDelay: durationpb.New(d)})
+		require.NoError(t, err)
+		return st.Err()
+	}
+
+	delay, ok := retryDelay(withRetry(codes.Unauthenticated, 5*time.Minute))
+	assert.True(t, ok)
+	assert.Equal(t, 5*time.Minute, delay)
+
+	delay, ok = retryDelay(fmt.Errorf("stream: %w", withRetry(codes.PermissionDenied, time.Minute)))
+	assert.True(t, ok, "a wrapped status still carries its hint")
+	assert.Equal(t, time.Minute, delay)
+
+	_, ok = retryDelay(status.Error(codes.Unauthenticated, "invalid API key"))
+	assert.False(t, ok, "no hint falls back to the defaults")
+
+	_, ok = retryDelay(withRetry(codes.Unauthenticated, 0))
+	assert.False(t, ok, "a zero delay is no hint")
+
+	_, ok = retryDelay(errors.New("dial failed"))
+	assert.False(t, ok)
 }

@@ -3,6 +3,7 @@ package cloud
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	pb "github.com/amir20/dozzle/proto/cloud"
 	"google.golang.org/grpc/metadata"
@@ -60,6 +61,10 @@ type AlertHit struct {
 	// URL deep-links to the alert page in Dozzle Cloud. Empty when the API key
 	// has no app_url configured.
 	URL string `json:"url,omitempty"`
+	// SubscriptionID is the rule that raised this alert, so activity can be
+	// shown on the card that caused it. Empty for alerts Cloud raised with no
+	// Dozzle-side rule behind them.
+	SubscriptionID string `json:"subscriptionId,omitempty"`
 }
 
 // EventHit is one matched event — a notification Dozzle raised because it hit a
@@ -78,6 +83,27 @@ type EventHit struct {
 	// Suppressed means the event produced no notification of its own: it was
 	// folded into an alert already sent, or never reached one at all.
 	Suppressed bool `json:"suppressed"`
+	// Deploy is set when Type is "deploy": Dozzle Cloud's verdict on the
+	// update that created ContainerID. The viewer puts it on that update's
+	// marker rather than adding a row of its own.
+	Deploy *DeployHit `json:"deploy,omitempty"`
+}
+
+// DeployHit is Dozzle Cloud's verdict on one container update.
+type DeployHit struct {
+	// DeployID is opaque, like AlertHit.AlertID.
+	DeployID   string `json:"deployId"`
+	Container  string `json:"container,omitempty"`
+	FromRef    string `json:"fromRef,omitempty"`
+	ToRef      string `json:"toRef,omitempty"`
+	FromDigest string `json:"fromDigest,omitempty"`
+	ToDigest   string `json:"toDigest,omitempty"`
+	// Verdict is pending, clean, regressed, unsure or rolled_back_by_dozzle.
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason,omitempty"`
+	// Decision is rolled_back or kept once someone decided a regression.
+	Decision string `json:"decision,omitempty"`
+	URL      string `json:"url,omitempty"`
 }
 
 // GetAlerts fetches the alerts that fired on these containers inside a window,
@@ -118,6 +144,12 @@ func (c *Client) GetAlerts(ctx context.Context, containerIDs []string, hostID st
 		return nil, fmt.Errorf("cloud: alerts: %w", err)
 	}
 
+	return alertResultFromProto(resp), nil
+}
+
+// alertResultFromProto converts one alerts response. Both alert RPCs answer
+// with the same message, so the mapping lives here rather than twice.
+func alertResultFromProto(resp *pb.GetAlertsResponse) *AlertResult {
 	hits := make([]AlertHit, 0, len(resp.GetHits()))
 	for _, h := range resp.GetHits() {
 		hits = append(hits, AlertHit{
@@ -137,7 +169,8 @@ func (c *Client) GetAlerts(ctx context.Context, containerIDs []string, hostID st
 			CreatedAt:       h.GetCreatedAtNs(),
 			LastActivityAt:  h.GetLastActivityAtNs(),
 			IsOrigin:        h.GetIsOrigin(),
-			URL:             h.GetUrl(),
+			URL:             httpURL(h.GetUrl()),
+			SubscriptionID:  h.GetSubscriptionId(),
 		})
 	}
 	events := make([]EventHit, 0, len(resp.GetEvents()))
@@ -153,7 +186,75 @@ func (c *Client) GetAlerts(ctx context.Context, containerIDs []string, hostID st
 			Detail:      e.GetDetail(),
 			AlertID:     e.GetAlertId(),
 			Suppressed:  e.GetSuppressed(),
+			Deploy:      deployHitFromProto(e.GetDeploy()),
 		})
 	}
-	return &AlertResult{Hits: hits, Events: events, Truncated: resp.GetTruncated()}, nil
+	return &AlertResult{Hits: hits, Events: events, Truncated: resp.GetTruncated()}
+}
+
+// deployHitFromProto converts a deploy verdict. nil stays nil: only deploy
+// events carry one.
+func deployHitFromProto(d *pb.DeployHit) *DeployHit {
+	if d == nil {
+		return nil
+	}
+	return &DeployHit{
+		DeployID:   d.GetDeployId(),
+		Container:  d.GetContainer(),
+		FromRef:    d.GetFromRef(),
+		ToRef:      d.GetToRef(),
+		FromDigest: d.GetFromDigest(),
+		ToDigest:   d.GetToDigest(),
+		Verdict:    d.GetVerdict(),
+		Reason:     d.GetReason(),
+		Decision:   d.GetDecision(),
+		URL:        httpURL(d.GetUrl()),
+	}
+}
+
+// httpURL drops anything that is not an absolute http(s) URL. The viewer puts
+// it straight into an href, where a javascript: link would run on click.
+func httpURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return ""
+	}
+	return raw
+}
+
+// GetRecentAlerts fetches what fired lately across the whole instance, for the
+// notifications page and the container dot. This is the question the viewer
+// never asks: it has no container list up front and does not care which scroll
+// window an alert landed in.
+//
+// The caller is responsible for confining the result to what the requesting
+// user may see — Cloud scopes to the instance, not to a Dozzle user.
+func (c *Client) GetRecentAlerts(ctx context.Context, sinceNs int64, limit int32, subscriptionID string, includeFollowUps bool) (*AlertResult, error) {
+	apiKey := c.apiKeyFunc()
+	if apiKey == "" {
+		return nil, ErrNotConfigured
+	}
+
+	client, err := c.unaryServiceClient()
+	if err != nil {
+		return nil, err
+	}
+
+	mdPairs := []string{"x-api-key", apiKey}
+	if c.instanceID != "" {
+		mdPairs = append(mdPairs, "x-instance-id", c.instanceID)
+	}
+	callCtx := metadata.NewOutgoingContext(ctx, metadata.Pairs(mdPairs...))
+
+	resp, err := client.GetRecentAlerts(callCtx, &pb.GetRecentAlertsRequest{
+		SinceTsNs:        sinceNs,
+		Limit:            limit,
+		SubscriptionId:   subscriptionID,
+		IncludeFollowUps: includeFollowUps,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cloud: recent alerts: %w", err)
+	}
+
+	return alertResultFromProto(resp), nil
 }

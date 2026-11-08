@@ -1,0 +1,355 @@
+package logparse
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/amir20/dozzle/internal/container"
+)
+
+func TestGuessPinoLogLevel(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{`{"level":10,"msg":"trace message"}`, "trace"},
+		{`{"level":20,"msg":"debug message"}`, "debug"},
+		{`{"level":30,"time":1788571152988,"pid":1,"hostname":"example","msg":"Service started"}`, "info"},
+		{`{"level":40,"msg":"warning message"}`, "warn"},
+		{`{"level":50,"msg":"error message"}`, "error"},
+		{`{"level":60,"msg":"fatal message"}`, "fatal"},
+		{`{"level":30.0}`, "info"},
+		{`{"level":35}`, "unknown"},
+		{`{"level":30.5}`, "unknown"},
+		{`{"level":0}`, "unknown"},
+		{`{"level":-10}`, "unknown"},
+		{`{"level":70}`, "unknown"},
+		{`{"level":null}`, "unknown"},
+		{`{"level":true}`, "unknown"},
+		{`{"level":"30"}`, "unknown"},
+		{`{"severity":30}`, "unknown"},
+		{`{"@l":30}`, "unknown"},
+		{`{"log.level":30}`, "unknown"},
+		{`{"@l":"error","level":30}`, "error"},
+		{`{"level":30,"severity":"error"}`, "info"},
+		{`{"level":35,"severity":"warn"}`, "warn"},
+		{`{"level":"panic","msg":"zerolog panic"}`, "fatal"},
+	}
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			// Exercise the same JSON decoding path as container logs.
+			event := createEvent("2026-09-05T00:00:00Z "+test.input, container.STDOUT)
+			if event.Type != container.LogTypeComplex {
+				t.Fatalf("Expected JSON log event, got %v", event.Type)
+			}
+			if actual := guessLogLevel(event); actual != test.expected {
+				t.Errorf("Expected %s, got %s", test.expected, actual)
+			}
+		})
+	}
+}
+
+func TestGuessOtelLogLevel(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// severityText follows the OpenTelemetry Log Data Model.
+		{`{"severityText":"TRACE","body":"trace message"}`, "trace"},
+		{`{"severityText":"DEBUG","body":"debug message"}`, "debug"},
+		{`{"severityText":"INFO","body":"info message"}`, "info"},
+		{`{"severityText":"WARN","body":"warn message"}`, "warn"},
+		{`{"severityText":"ERROR","body":"error message"}`, "error"},
+		{`{"severityText":"FATAL","body":"fatal message"}`, "fatal"},
+		{`{"severityText":"information","body":"lower case"}`, "info"},
+		{`{"severityText":"bogus","body":"not a level"}`, "unknown"},
+		// OTel short names for sub-levels append 1-4 to the base name.
+		{`{"severityText":"TRACE2"}`, "trace"},
+		{`{"severityText":"DEBUG3"}`, "debug"},
+		{`{"severityText":"INFO4"}`, "info"},
+		{`{"severityText":"WARN2"}`, "warn"},
+		{`{"severityText":"ERROR3"}`, "error"},
+		{`{"severityText":"FATAL4"}`, "fatal"},
+		{`{"severityText":"INFO5"}`, "unknown"},
+		// A severityText we cannot map falls back to severityNumber.
+		{`{"severityText":"WARN2","severityNumber":14}`, "warn"},
+		{`{"severityText":"Notice","severityNumber":9}`, "info"},
+		{`{"severityText":"","severityNumber":17}`, "error"},
+		{`{"severityText":"bogus","severityNumber":0}`, "unknown"},
+		{`{"severityText":42,"severityNumber":21}`, "fatal"},
+		// severityNumber ranges per the OTel spec.
+		{`{"severityNumber":1}`, "trace"},
+		{`{"severityNumber":4}`, "trace"},
+		{`{"severityNumber":5}`, "debug"},
+		{`{"severityNumber":8}`, "debug"},
+		{`{"severityNumber":9}`, "info"},
+		{`{"severityNumber":12}`, "info"},
+		{`{"severityNumber":13}`, "warn"},
+		{`{"severityNumber":16}`, "warn"},
+		{`{"severityNumber":17}`, "error"},
+		{`{"severityNumber":20}`, "error"},
+		{`{"severityNumber":21}`, "fatal"},
+		{`{"severityNumber":24}`, "fatal"},
+		{`{"severityNumber":0}`, "unknown"},
+		{`{"severityNumber":25}`, "unknown"},
+		{`{"severityNumber":-5}`, "unknown"},
+		{`{"severityNumber":9.5}`, "unknown"},
+		{`{"severityNumber":"17"}`, "error"},
+		{`{"severityNumber":"nope"}`, "unknown"},
+		{`{"severityNumber":true}`, "unknown"},
+		// Existing keys keep their priority over the OTel fields.
+		{`{"level":30,"severityText":"ERROR"}`, "info"},
+		{`{"level":50,"severityNumber":9}`, "error"},
+		{`{"severity":"warn","severityText":"ERROR"}`, "warn"},
+	}
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			// Exercise the same JSON decoding path as container logs.
+			event := createEvent("2026-09-05T00:00:00Z "+test.input, container.STDOUT)
+			if event.Type != container.LogTypeComplex {
+				t.Fatalf("Expected JSON log event, got %v", event.Type)
+			}
+			if actual := guessLogLevel(event); actual != test.expected {
+				t.Errorf("Expected %s, got %s", test.expected, actual)
+			}
+		})
+	}
+}
+
+func TestGuessLogLevel(t *testing.T) {
+	var nilOrderedMap container.Fields[any]
+	tests := []struct {
+		input    any
+		expected string
+	}{
+		{"2024/12/30 12:21AM INF this is a test", "info"},
+		{"2025-01-07 22:00:08,059: DEBUG/MainProcess TaskPool: ", "debug"},
+		{"Some test with error-test", "error"},
+		{"2024-12-30T17:43:16Z DBG loggging debug from here", "debug"},
+		{"2025-01-07 15:40:15,784 LL=\"ERROR\" some message", "error"},
+		{"2025-01-07 15:40:15,784 LL=\"WARN\" some message", "warn"},
+		{"2025-01-07 15:40:15,784 LL=\"INFO\" some message", "info"},
+		{"2025-01-07 15:40:15,784 LL=\"DEBUG\" some message", "debug"},
+		{"ERROR: Something went wrong", "error"},
+		{"WARN: Something might be wrong", "warn"},
+		{"INFO: Something happened", "info"},
+		{"debug: Something happened", "debug"},
+		{"debug Something happened", "debug"},
+		{"TRACE: Something happened", "trace"},
+		{"FATAL: Something happened", "fatal"},
+		// ASP.NET Core console formatter.
+		{"fail: Microsoft.AspNetCore.Server.Kestrel[13]", "error"},
+		{"crit: Microsoft.Hosting.Lifetime[0]", "fatal"},
+		{"dbug: Microsoft.AspNetCore.Routing[1]", "debug"},
+		{"trce: Microsoft.AspNetCore.Hosting[2]", "trace"},
+		{"2025-01-07 12:00:00 [FAIL] check", "error"},
+		{"Connection failed: timeout", "unknown"},
+		{"INFO: entering fail-safe mode", "info"},
+		{"[ERROR] Something went wrong", "error"},
+		{"[error] Something went wrong", "error"},
+		{"[ ERROR ] Something went wrong", "error"},
+		{"[error] Something went wrong", "error"},
+		{"[test] [error] Something went wrong", "error"},
+		{"[foo] [ ERROR] Something went wrong", "error"},
+		{"123 ERROR Something went wrong", "error"},
+		{"123 Something went wrong", "unknown"},
+		{"DBG Something went wrong", "debug"},
+		{"DBG with more error=msg", "debug"},
+		{"inf Something went wrong", "info"},
+		{"crit: Something went wrong", "fatal"},
+		{"[21:01:45] [WRN] this is a test", "warn"},
+		// Serilog default template: timestamp and level share one bracket.
+		{"[2026-09-28 09:58:00.046 ERR] [MalwareBlocker] [Radarr] Error creating download service for qBittorrent", "error"},
+		{"[09:58:00 INF] Starting up", "info"},
+		{"[09:58:00 WRN] Retrying", "warn"},
+		{"[2026-09-28 09:58:00.046 +00:00 DBG] handler started", "debug"},
+		{"[Connection error] retrying", "unknown"},
+		// Asterisk: the level is glued to the thread id, plus the call id when there is one.
+		{"[2026-10-25 06:44:27] ERROR[1]: res_config_ldap.c:1769 load_module: Cannot load LDAP RealTime driver.", "error"},
+		{"[2026-10-25 06:44:27] WARNING[1]: res_odbc.c:577 load_odbc_config: Unable to load config file res_odbc.conf", "warn"},
+		{"[2026-10-25 06:44:27] NOTICE[1]: res_statsd.c:399 load_module: Could not load statsd config; using defaults", "info"},
+		{"[2026-10-25 06:44:27] DEBUG[871]: res_pjsip_session.c:4027 new_invite: Call is being authenticated", "debug"},
+		{"[2026-10-25 07:12:03] WARNING[2271][C-0000000a]: chan_pjsip.c:2567 request: Failed to authenticate, error 401", "warn"},
+		{"[Oct 25 06:44:27] ERROR[1]: config_options.c:710 aco_process_config: Unable to load config file 'statsd.conf'", "error"},
+		{"[2026-10-25 06:44:28]     -- Reloading module 'extconfig' (Configuration)", "unknown"},
+		// klog / glog format used across the Kubernetes toolchain
+		{"E0806 14:55:55.980915       1 fsHandler.go:121] failed to collect filesystem stats", "error"},
+		{"W0806 14:54:52.068675       1 info.go:52] Couldn't collect info from any of the files", "warn"},
+		{"I0808 13:37:10.853121       1 cadvisor.go:182] Starting cAdvisor version: v0.60.5", "info"},
+		{"F0806 14:55:55.980915       1 main.go:10] exiting", "fatal"},
+		// the level letter must be glued to a full klog timestamp, not just any capital
+		{"E0806 is not a klog line", "unknown"},
+		{"Warning0806 14:55:55.980915 not klog either", "warn"},
+		{"2026-01-05 12:13:24,566 - retry.api                        (7fd8ad34eb30) :  WARNING (api:40) - HTTPSConnectionPool(host='podnapisi.net', port=443): Max retries exceeded", "warn"},
+		{"2026-01-05 08:21:16,511 - root                             (7fd8bf822b30) :  INFO (get_providers:408) - Throttling podnapisi for 10 minutes", "info"},
+		{container.Fields[string]{
+			{Key: "key", Value: "value"},
+			{Key: "level", Value: "info"},
+		}, "info"},
+		{container.Fields[any]{
+			{Key: "key", Value: "value"},
+			{Key: "level", Value: "info"},
+		}, "info"},
+		{container.Fields[string]{
+			{Key: "key", Value: "value"},
+			{Key: "severity", Value: "info"},
+		}, "info"},
+		{container.Fields[any]{
+			{Key: "key", Value: "value"},
+			{Key: "severity", Value: "info"},
+		}, "info"},
+		{container.Fields[string]{
+			{Key: "severityText", Value: "ERROR"},
+		}, "error"},
+		{container.Fields[string]{
+			{Key: "severityNumber", Value: "17"},
+		}, "error"},
+		{container.Fields[string]{
+			{Key: "severityNumber", Value: "not-a-number"},
+		}, "unknown"},
+		{container.Fields[string]{
+			{Key: "severityText", Value: "WARN2"},
+		}, "warn"},
+		{container.Fields[string]{
+			{Key: "severityText", Value: "Notice"},
+			{Key: "severityNumber", Value: "9"},
+		}, "info"},
+		{container.Fields[string]{
+			{Key: "key", Value: "value"},
+			{Key: "@l", Value: "info"},
+		}, "info"},
+		{container.Fields[any]{
+			{Key: "key", Value: "value"},
+			{Key: "@l", Value: "debug"},
+		}, "debug"},
+		{container.Fields[string]{
+			{Key: "@l", Value: "error"},
+			{Key: "@t", Value: "2024-01-01T00:00:00Z"},
+		}, "error"},
+		// Zigbee2MQTT-style: bracketed timestamp + " <level>:" inside the line.
+		{"[2025-12-22 12:00:00] info: 	z2m: started", "info"},
+		{"[2025-12-22 12:00:00] warn: 	z2m: queue full", "warn"},
+		{"[2025-12-22 12:00:00] error: 	z2m: connection failed", "error"},
+		{"[2025-12-22 12:00:00] debug: 	z2m: handling message", "debug"},
+		// "<tag>:<level> " style (no space before the colon).
+		{"Zigbee2MQTT:info  2025-12-22 12:00:00: started", "info"},
+		{"Zigbee2MQTT:warn  2025-12-22 12:00:00: queue full", "warn"},
+		{"Zigbee2MQTT:error  2025-12-22 12:00:00: failure", "error"},
+		// SABnzbd-style: "::" delimited level after a comma-millis timestamp.
+		{"2026-08-22 21:29:25,119::INFO::[newswrapper:229] Connecting 1@news.newshosting.com finished", "info"},
+		{"2026-08-22 21:29:25,119::ERROR::[newswrapper:229] Connecting 1@news.newshosting.com failed", "error"},
+		{"2026-08-22 21:29:25,119::WARNING::[newswrapper:229] Connecting slowly", "warn"},
+		{"2026-08-22 21:29:25,119::DEBUG::[newswrapper:229] Connecting", "debug"},
+		// Nginx Proxy Manager / signale: "[tag] \u203a <symbol>  <level>  message".
+		{"[8/21/2026] [9:58:28 PM] [SSL      ] \u203a \u2139  info      Renewing SSL certs expiring within 30 days ...", "info"},
+		{"[8/22/2026] [12:58:28 AM] [Nginx    ] \u203a \u26a0  warning   Reloading Nginx", "warn"},
+		{"[8/22/2026] [12:58:28 AM] [SSL      ] \u203a \u2716  error     Renew failed", "error"},
+		{"[8/22/2026] [12:58:28 AM] [SSL      ] \u203a \u2139  info      Fetch failed with error: timeout", "info"},
+		// Pipe-delimited
+		{"2024-01-01 12:00:00 | ERROR | something went wrong", "error"},
+		{"2024-01-01 12:00:00 | INFO | starting up", "info"},
+		{"app INFO| starting up", "info"},
+		// Single-letter bracket levels
+		{"[I] starting up", "info"},
+		{"[E] something went wrong", "error"},
+		{"[W] something might be wrong", "warn"},
+		{"[D] debugging info", "debug"},
+		{"[F] fatal error", "fatal"},
+		{"[T] trace message", "trace"},
+		{"[V] verbose message", "trace"},
+		{"12:00:00 [I] starting up", "info"},
+		// A generic type parameter or index is not a level tag.
+		{"   at NzbDrone.Common.Http.HttpClient.GetAsync[T](HttpRequest request) in ./HttpClient.cs:line 333", "unknown"},
+		{"value = items[I] + 1", "unknown"},
+		// Issue #4768: a real level prefix must win over a level word in the message body.
+		{"INFO: connection established, retrying after error: timeout", "info"},
+		{"INFO handling request failed with error: bad gateway", "info"},
+		{"2024-12-30T17:43:16Z INF some message about an error: foo", "info"},
+		{"INFO request completed but contained ERROR token", "info"},
+		{"WARN: connection error: retrying", "warn"},
+		// Symmetric: an ERROR prefix still wins over a later info word.
+		{"ERROR: handler failed, info: will retry", "error"},
+		// .NET / Serilog / Microsoft.Extensions.Logging spell out "Information".
+		{"Information: service started", "info"},
+		{"[Information] service started", "info"},
+		{"2024-12-30T17:43:16Z Information starting up", "info"},
+		{container.Fields[string]{
+			{Key: "level", Value: "Information"},
+		}, "info"},
+		{container.Fields[any]{
+			{Key: "@l", Value: "Information"},
+		}, "info"},
+		// Equal confidence between two different levels -> unknown (don't guess).
+		{"saw info: here and error: there", "unknown"},
+		{"[INFO] [DEBUG] both bracketed", "unknown"},
+		{container.Fields[any]{
+			{Key: "key", Value: "value"},
+			{Key: "level", Value: "warning"},
+		}, "warn"},
+		// Fail2ban native format (issue #5334).
+		{"2026-10-04 08:30:00,124 fail2ban.server         [1]: INFO    Starting Fail2ban v1.1.0", "info"},
+		{"2026-10-04 08:31:02,111 fail2ban.filters        [1]: NOTICE  [sshd] Ready to monitor log file /var/log/auth.log", "info"},
+		{"2026-10-04 08:32:15,004 fail2ban.filter         [1]: DEBUG   [sshd] Processing line: Oct  4 08:32:14 server sshd[1234]: Failed password for invalid user admin from 192.168.1.150 port 54321 ssh2", "debug"},
+		{"2026-10-04 08:32:15,005 fail2ban.filter         [1]: TRACEDEBUG [sshd] Regex match found for <HOST> (192.168.1.150)", "trace"},
+		{"2026-10-04 08:32:15,006 fail2ban.filter         [1]: HEAVYDEBUG [sshd] Current failures for 192.168.1.150: 1", "trace"},
+		{"2026-10-04 08:35:40,299 fail2ban.filter         [1]: WARNING [sshd] 'ignoreregex' not defined in 'Definition'. Using default one: ''", "warn"},
+		{"2026-10-04 08:40:12,842 fail2ban.filter         [1]: INFO    [sshd] Found 192.168.1.150 - 2026-10-04 08:40:12", "info"},
+		{"2026-10-04 08:40:14,210 fail2ban.actions        [1]: NOTICE  [sshd] Ban 192.168.1.150", "info"},
+		{"2026-10-04 08:40:14,350 fail2ban.action         [1]: ERROR   [sshd] Failed to execute ban action 'iptables-multiport' for 192.168.1.150: command returned 1", "error"},
+		{"2026-10-04 08:45:00,001 fail2ban.database       [1]: CRITICAL Database connection lost unexpectedly. Attempting emergency SQLite recovery.", "fatal"},
+		{"2026-10-04 08:30:00,124 fail2ban.server         [1]: INFO    retrying after error: timeout", "info"},
+		{"fail2ban.server         [1]: INFO    Starting Fail2ban v1.1.0", "info"},
+		{"fail2ban                [1]: INFO    Using socket file /var/run/fail2ban/fail2ban.sock", "info"},
+		{"fail2ban.actions        [1]: NOTICE  Ban 192.168.1.150", "info"},
+		// NestJS (Immich): the upper-case level wins over "error:" in the message.
+		{"[Nest] 7  - 10/12/2026, 10:00:00 AM     LOG [Api:EventRepository] Websocket Connect: abc", "info"},
+		{"[Nest] 7  - 10/12/2026, 10:00:00 AM    WARN [Microservices:StorageService] Error: EROFS: read-only file system, unlink '/x'", "warn"},
+		{"[Nest] 25  - 10/11/2026, 10:30:32 PM   DEBUG [Api:Bootstrap] Socket error: read ECONNRESET", "debug"},
+		{"[Nest] 7  - 10/12/2026, 10:00:00 AM   ERROR [Microservices:JobService] Unable to run job handler", "error"},
+		{"[Nest] 7  - 10/12/2026, 10:00:00 AM VERBOSE [Api:LoggingInterceptor] GET /api/server/ping 200", "trace"},
+		{"[Nest] 7  - 10/12/2026, 10:00:00 AM     LOG [Microservices:MetadataService] Error reading exif, falling back", "info"},
+		// Postgres default prefix. DETAIL/STATEMENT are not levels.
+		{"2026-10-08 19:37:00.681 UTC [61] LOG:  database system is ready to accept connections", "info"},
+		{"2026-10-08 19:37:00.681 UTC [61] LOG:  could not receive data from client: Connection reset by peer", "info"},
+		{"2026-10-08 19:37:00.681 UTC [61] WARNING:  there is no transaction in progress", "warn"},
+		{"2026-10-08 19:37:00.681 UTC [61] ERROR:  relation \"x\" does not exist", "error"},
+		{"2026-10-05 01:35:24.746 EDT [148304] FATAL:  connection to client lost", "fatal"},
+		{"2026-10-08 19:37:00.681 UTC [61] PANIC:  could not write to file \"pg_wal/xlogtemp.1\": No space left on device", "fatal"},
+		{"2026-10-08 19:37:00.681 +03 [61] LOG:  checkpoint starting: time", "info"},
+		{"2026-10-08 19:37:00.681 UTC [61] STATEMENT:  select * from users", "unknown"},
+		{"LOG:  database system is ready to accept connections", "info"},
+		{"PANIC:  could not locate a valid checkpoint record", "fatal"},
+		{"Login failed for user", "unknown"},
+		// Winston with a label: the level comes before the message, so a later
+		// upper-case word does not override it.
+		{"[api] info: upstream returned ERROR 502", "info"},
+		{"[worker] warn: retrying, FAIL count=2", "warn"},
+		// Lower-case panic is not a level: the line's own error wins.
+		{"panic: runtime error: index out of range [3] with length 3", "error"},
+		{"http: recovered from panic: runtime error: invalid memory address", "error"},
+		// MariaDB notes.
+		{"2026-10-12 10:00:00 0 [Note] mariadbd: ready for connections.", "info"},
+		// Negative tests: ordinary prose containing level words or 'fail' prefix.
+		{"ordinary prose containing notice", "unknown"},
+		{"ordinary prose containing critical", "unknown"},
+		{"ordinary prose containing note", "unknown"},
+		{"ordinary prose containing panic", "unknown"},
+		{"failed to write log: disk full", "unknown"},
+		{"ordinary prose containing fail", "unknown"},
+		{"msg: error handling enabled", "unknown"},
+		{"config loaded: critical=false", "unknown"},
+		{"user: info requested", "unknown"},
+		{nilOrderedMap, "unknown"},
+		{nil, "unknown"},
+	}
+
+	for _, test := range tests {
+		name, _ := json.Marshal(test.input)
+		t.Run(string(name), func(t *testing.T) {
+			actual := guessLogLevel(&container.LogEvent{Message: test.input})
+			if actual != test.expected {
+				t.Errorf("Expected %s, got %s", test.expected, actual)
+			}
+		})
+	}
+}

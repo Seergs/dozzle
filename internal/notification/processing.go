@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/amir20/dozzle/internal/analytics"
 	"github.com/amir20/dozzle/internal/container"
 	"github.com/amir20/dozzle/internal/notification/dispatcher"
 	"github.com/amir20/dozzle/types"
@@ -63,6 +65,16 @@ func (m *Manager) processLogEvent(logEvent *container.LogEvent) {
 			return true
 		}
 
+		// An immediate rule is sent line by line with nothing downstream to batch
+		// it, so its cooldown is what stands between a noisy log and the user.
+		// Other log rules stay uncooled: Dozzle Cloud needs every line to judge them.
+		if sub.Immediate {
+			if sub.IsEventCooldownActive(notificationContainer.ID) {
+				return true
+			}
+			sub.SetEventCooldown(notificationContainer.ID)
+		}
+
 		// Update stats
 		sub.AddTriggeredContainer(notificationContainer.ID)
 		sub.TriggerCount.Add(1)
@@ -85,6 +97,7 @@ func (m *Manager) processLogEvent(logEvent *container.LogEvent) {
 				DispatcherID:        sub.DispatcherID,
 				LogExpression:       sub.LogExpression,
 				ContainerExpression: sub.ContainerExpression,
+				Immediate:           sub.Immediate,
 			},
 			Timestamp: time.Now(),
 		}
@@ -182,6 +195,7 @@ func (m *Manager) processStatEvent(event *ContainerStatEvent) {
 				DispatcherID:        sub.DispatcherID,
 				MetricExpression:    sub.MetricExpression,
 				ContainerExpression: sub.ContainerExpression,
+				Immediate:           sub.Immediate,
 				Cooldown:            sub.Cooldown,
 				SampleWindow:        sub.SampleWindow,
 			},
@@ -256,6 +270,12 @@ func (m *Manager) processDockerEvent(event *ContainerEventEntry) {
 		if exitCode, ok := event.Event.ActorAttributes["exitCode"]; ok && event.Event.Name == "die" {
 			detail = fmt.Sprintf("Container event: %s (exit code %s)", event.Event.Name, describeExitCode(exitCode))
 		}
+		if event.Event.Name == UpdateEventName {
+			detail = describeUpdate(event.Event.ActorAttributes)
+		}
+		if event.Event.Name == UpdateAvailableEventName {
+			detail = describeUpdateAvailable(event.Event.ActorAttributes)
+		}
 
 		notification := types.Notification{
 			ID:        fmt.Sprintf("%s-event-%d", event.Event.ActorID, time.Now().UnixNano()),
@@ -270,6 +290,7 @@ func (m *Manager) processDockerEvent(event *ContainerEventEntry) {
 				DispatcherID:        sub.DispatcherID,
 				EventExpression:     sub.EventExpression,
 				ContainerExpression: sub.ContainerExpression,
+				Immediate:           sub.Immediate,
 				Cooldown:            sub.Cooldown,
 			},
 			Timestamp: time.Now(),
@@ -280,6 +301,42 @@ func (m *Manager) processDockerEvent(event *ContainerEventEntry) {
 		}
 		return true
 	})
+}
+
+// describeUpdate is the detail of an update event: which image, and whether
+// the swap kept the new container or put the old one back.
+func describeUpdate(attributes map[string]string) string {
+	verb := "updated"
+	if attributes["rolledBack"] == "true" {
+		verb = "update rolled back"
+	}
+	detail := fmt.Sprintf("Container %s: %s", verb, attributes["image"])
+	if from, to := shortDigest(attributes["fromDigest"]), shortDigest(attributes["toDigest"]); from != "" && to != "" {
+		detail += fmt.Sprintf(" (%s → %s)", from, to)
+	}
+	return detail
+}
+
+// describeUpdateAvailable is the detail of an update_available event: the
+// image, and the versions when both images declare one, the digests otherwise.
+func describeUpdateAvailable(attributes map[string]string) string {
+	detail := fmt.Sprintf("Update available: %s", attributes["image"])
+	if from, to := attributes["currentVersion"], attributes["latestVersion"]; from != "" && to != "" {
+		detail += fmt.Sprintf(" (%s → %s)", from, to)
+	} else if from, to := shortDigest(attributes["currentDigest"]), shortDigest(attributes["latestDigest"]); from != "" && to != "" {
+		detail += fmt.Sprintf(" (%s → %s)", from, to)
+	}
+	return detail
+}
+
+// shortDigest is the first 12 hex characters of a repo@sha256:... or
+// sha256:... digest, or "" for none.
+func shortDigest(digest string) string {
+	_, hex, found := strings.Cut(digest, "sha256:")
+	if !found {
+		return ""
+	}
+	return hex[:min(12, len(hex))]
 }
 
 // signalExitCodes maps the 128+N exit codes a container gets when a signal kills
@@ -342,5 +399,7 @@ func (m *Manager) sendNotification(d dispatcher.Dispatcher, notification types.N
 
 	if err := d.Send(ctx, notification); err != nil {
 		log.Error().Err(err).Int("subscription", id).Msg("Failed to send notification")
+		return
 	}
+	analytics.Count("notify." + string(notification.Type))
 }

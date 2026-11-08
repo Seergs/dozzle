@@ -30,6 +30,8 @@ const cloudSearchTimeout = 3 * time.Second
 //	204 — streamLogs is disabled; nothing to search
 //	503 — cloud not configured (no API key) or no SearchLogs func wired
 //	504 — cloud round-trip exceeded the search timeout
+//	400 — cloud rejected the query itself (InvalidArgument)
+//	422 — cloud gave up on a query too broad to finish (ResourceExhausted)
 //	502 — any other cloud-side error
 func (h *handler) cloudSearchLogs(w http.ResponseWriter, r *http.Request) {
 	if h.config.Cloud.SearchLogs == nil {
@@ -81,10 +83,18 @@ func (h *handler) cloudSearchLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The histogram above the results; the page asks for it on its first page only.
+	// Cloud counts every container on the instance and the buckets carry no
+	// container to filter on, so a label-restricted caller never gets one.
+	volume := r.URL.Query().Get("volume") == "1" && !h.restrictedUser(r)
+
+	// Set by the in-log find handoff. Cloud owns what a find query means.
+	regex := r.URL.Query().Get("regex") == "1"
+
 	ctx, cancel := context.WithTimeout(r.Context(), cloudSearchTimeout)
 	defer cancel()
 
-	result, err := h.config.Cloud.SearchLogs(ctx, q, limit, hostID, containerID, before)
+	result, err := h.config.Cloud.SearchLogs(ctx, q, limit, hostID, containerID, before, volume, regex)
 	if err != nil {
 		if errors.Is(err, cloud.ErrNotConfigured) {
 			writeError(w, http.StatusServiceUnavailable, "cloud not configured")
@@ -98,6 +108,22 @@ func (h *handler) cloudSearchLogs(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusGatewayTimeout, "cloud search timed out")
 			return
 		}
+		// Cloud words these two for the person who typed the query ("wrap it
+		// in double quotes…"), so pass the message through. Every other code
+		// stays generic: its message describes Cloud's internals, not the
+		// search. Unwrapped with AsType rather than status.Convert: the client
+		// wraps the status ("cloud: search: %w"), and Convert would report the
+		// whole wrapped string as the message.
+		if grpcErr, ok := errors.AsType[grpcStatusError](err); ok {
+			switch st := grpcErr.GRPCStatus(); st.Code() {
+			case codes.InvalidArgument:
+				writeError(w, http.StatusBadRequest, st.Message())
+				return
+			case codes.ResourceExhausted:
+				writeError(w, http.StatusUnprocessableEntity, st.Message())
+				return
+			}
+		}
 		log.Warn().Err(err).Msg("cloud search failed")
 		writeError(w, http.StatusBadGateway, "cloud search failed")
 		return
@@ -105,7 +131,7 @@ func (h *handler) cloudSearchLogs(w http.ResponseWriter, r *http.Request) {
 
 	// Cloud scopes hits to the instance, not to the user. A label-restricted
 	// caller must not see lines from containers outside their scope, so drop
-	// anything the store wouldn't hand them. Fails closed: a container Cloud
+	// anything the store wouldn't hand them, and the instance-wide counts too. Fails closed: a container Cloud
 	// still has logs for but the store no longer knows about is dropped too.
 	if h.restrictedUser(r) && result != nil {
 		visible := h.visibleContainerIDs(r)
@@ -116,8 +142,16 @@ func (h *handler) cloudSearchLogs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		result.Hits = hits
+		result.Volume, result.StepNs, result.Total = nil, 0, nil
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+// grpcStatusError is an error carrying a gRPC status. It embeds error because
+// errors.AsType requires its type argument to implement it.
+type grpcStatusError interface {
+	error
+	GRPCStatus() *status.Status
 }

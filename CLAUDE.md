@@ -2,17 +2,33 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Comment Style
+## Response Style
 
-**Always use ultra-brief mode for all PR reviews and responses.**
+Keep chat responses brief: bullet points, `file:line` references, no "Strengths" or
+"Summary" sections. What the PR review bot looks for is set in `REVIEW.md` and
+`.github/workflows/claude-code-review.yml`, not here.
 
-Format:
+## Translations
 
-- Critical issues only (bugs, security, blockers)
-- Brief bullet points, no lengthy explanations
-- Skip verbose sections (no "Strengths", "Summary", etc.)
-- Include file:line references when relevant
-- Maximum ~10-15 lines per response
+`locales/en.yml` is the source of truth, but it is never the only file to change. Whenever you add, rename, or remove a key in `en.yml`, apply the same change to **every** other file in `locales/` in the same commit, with the string actually translated (not the English text copied over). Keys are also deleted everywhere when they lose their last consumer.
+
+There is no Crowdin or Weblate sync in this repo, so a key that only exists in `en.yml` silently falls back to English for every other locale and nothing ever flags it.
+
+### Docs Translations
+
+`docs/` is translated into `zh`, `de`, `fr` and `es`. The English page under `docs/` is the source of truth, and `docs/<locale>/<same path>` mirrors it. Changing an English page means updating all four translations in the same commit.
+
+Unlike `locales/`, there is no fallback here. A stale translated page renders confidently wrong instructions rather than quietly showing English, so drift is worse than a missing key.
+
+Each translated file carries a `sourceHash` in its frontmatter recording the English source it was written from. `bun docs/scripts/check-translations.mjs` fails when they diverge, and runs in CI as the `Docs Translations` job. After actually translating the changed prose, re-stamp with:
+
+```bash
+bun docs/scripts/check-translations.mjs --update
+```
+
+`--update` only re-stamps hashes. It does not translate anything, so running it on an untranslated page turns CI green while leaving the page wrong. Translate first.
+
+Inside translated pages, everything in a fenced code block stays byte-identical to English except natural-language comments, and internal links are locale-prefixed (`/guide/agent` becomes `/de/guide/agent`). The sidebar is not duplicated per locale: its structure lives in `docs/.vitepress/locales/structure.ts` and each locale file supplies only labels, so a new page needs one slug there plus one label per locale.
 
 ## Testing Unreleased PRs
 
@@ -31,6 +47,44 @@ When posting anything to GitHub, write like a human maintainer, not an AI assist
 - Lowercase casual tone is fine. Contractions are fine. Short sentences are fine.
 - Don't over-explain tradeoffs. State the decision, give one reason, stop.
 
+## Scope Discipline
+
+Small first versions win. Building is cheap here; reviewing and maintaining is not.
+
+- **Agree the scope as a changelog before any code.** For a new feature, write what
+  ships (user-visible bullets) and an explicit "Not in this release" list, and get it
+  approved. Anything not on the ship list is out of scope, however reasonable it looks.
+- **A plan is a menu, not a work order.** Build phase 1 only. Later phases start after
+  phase 1 has merged, unless the user asks for more.
+- **Reuse before you add.** A new table, RPC, proto field, flag, label or setting needs a
+  one-line reason why an existing one (labels, existing events, existing alert channels,
+  existing pages) can't do it. Prefer one delivery surface to several.
+- **Stop at ~1,000 lines.** If a PR's non-test, non-generated diff passes ~1,000 lines,
+  stop and check scope with the user before continuing.
+- **One feature, one PR per repo.** Unrelated work (e.g. a settings redesign during an
+  updates feature) gets its own PR off main, never a layer in the same stack. Avoid
+  stacks deeper than two; with a GitHub stack, merge from the bottom.
+- **Subagents and workflows get the out-of-scope list.** Every implementation prompt
+  includes "not in scope" and the rule: a deviation that adds behaviour is reported,
+  not built.
+- **Review fixes fix; they don't extend.** Addressing feedback must not add new
+  mechanisms. If a fix needs one, raise it as a scope question.
+- **Audit size before review, not after.** When a body of work is done, report its size
+  per feature (code, tests, generated) next to its user impact, so cuts happen before
+  review time is spent.
+
+## Before Opening a PR: `/verify`
+
+Run the **`verify` skill** (`.claude/skills/verify/`) before every `gh pr create`. It
+runs CI's checks for what the diff touches and proves the change works (a bug fix's test
+must fail on `main`). A fresh-context subagent then reviews the diff against
+**`REVIEW.md`**. The PR's `### Tests` section is filled from those real runs.
+
+`REVIEW.md` says what a review looks for in this repo: what failure looks like here
+(each item a bug that shipped once), the evidence rule, the Important/Nit/Pre-existing
+tags, and the summary format. The CI reviewer and local `/code-review` read it too.
+When the same review comment comes up twice, add it to `REVIEW.md`.
+
 ## Project Overview
 
 Dozzle is a lightweight, web-based Docker log viewer with real-time monitoring capabilities. It's a hybrid application with:
@@ -46,7 +100,7 @@ The application supports multiple deployment modes: standalone server, Docker Sw
 
 ```bash
 # Install dependencies
-pnpm install
+bun install
 
 # Generate certificates and protobuf files
 make generate
@@ -58,19 +112,23 @@ make generate
 # Run full development environment (backend + frontend with hot reload)
 make dev
 
+# Same, on a free port trio derived from this checkout's path, so several worktrees
+# can each run an instance at once. Prints the URL it picked.
+make dev-auto
+
 # Alternative: Run backend and frontend separately
-pnpm run watch:backend  # Go backend with air (port 3100)
-pnpm run watch:frontend # Vite dev server (port 3100)
+bun run watch:backend  # Go backend with air (port 3100)
+bun run watch:frontend # Vite dev server (port 3100)
 
 # Run in agent mode for development
-pnpm run agent:dev
+bun run agent:dev
 ```
 
 ### Building
 
 ```bash
 # Build frontend assets
-pnpm build
+bun run build
 # or
 make dist
 
@@ -88,19 +146,55 @@ make docker
 make test
 
 # Run frontend tests (Vitest)
-pnpm test
+bun run test
 # Run in watch mode
-TZ=UTC pnpm test --watch
+TZ=UTC bun run test --watch
 
 # Type checking
-pnpm typecheck
+bun run typecheck
+
+# Lint (Tailwind classes only)
+bun run lint
+bun run lint --fix
 ```
+
+Always go through `bun run` for `test` and `build`. `bun test` and `bun build` are
+bun's own test runner and bundler, not the scripts in `package.json`, and they fail
+in confusing ways against this codebase.
+
+`bun run` does not mean the bun runtime: it follows each tool's `#!/usr/bin/env node`
+shebang unless the script says `bun --bun`. Every script in `package.json` that starts a
+JS tool carries that flag except `test` and `typecheck`, which need node: under `--bun` vitest's jsdom
+workers fail to start and `vue-tsc` reports a false TS2614. `release` (bumpp) is
+untested on bun and also left alone. Those are the only reasons node is still required.
+
+### Linting
+
+ESLint here checks Tailwind classes and nothing else. It is not a general JS or TS
+linter, and it should not become one: `tsconfig.json` already has `strict`,
+`strictNullChecks` and `noUnusedLocals`, so `vue-tsc` covers that ground, and prettier
+plus `prettier-plugin-tailwindcss` own formatting and class order. No stylistic rule
+belongs in `eslint.config.js`, which is also why `eslint-config-prettier` is not needed.
+
+Every rule the Tailwind plugin ships is listed in that config with the reason it is on
+or off, so add to that list rather than reaching for a preset.
+
+`eslint --fix` runs on staged `js`/`mjs`/`ts`/`mts`/`vue` in the pre-commit hook, before
+prettier so prettier gets the last word on formatting. Run `bun run lint --fix` by hand
+after writing a batch of markup if you would rather not find out at commit time.
+
+Two blind spots worth knowing, because a green run does not mean a clean tree:
+
+- `@apply` inside an SFC `<style>` block is never handed to the plugin, so a bad class
+  there is never reported.
+- The arbitrary-value rule only maps whole-number spacing steps. `gap-[2px]` and `w-[3px]`
+  go unreported even though `gap-0.5` and `w-0.75` exist.
 
 ### Preview & Other
 
 ```bash
 # Preview production build locally
-pnpm preview
+bun run preview
 # or
 make preview
 
@@ -119,15 +213,31 @@ The Go backend is organized into these key packages:
   - WebSocket/SSE handlers for log streaming (`logs.go`)
   - Authentication middleware and token management (`auth.go`)
   - Container action handlers (`actions.go`)
+  - `sse/`: the SSE writer; `search/`: log filtering, highlighting and HTML escaping
 
-- **`internal/docker/`** - Docker API client implementation
-  - `client.go`: Main Docker client wrapper with container operations
-  - `log_reader.go`: Streaming container logs
-  - `stats_collector.go`: Real-time container stats collection
+- **`internal/container/`** - The generic layer every platform implements
+  - `types.go`, `host.go`: domain models (`Container`, `Host`, `LogEvent`, `ContainerStat`)
+  - `client.go`: `container.Client`, the raw engine interface
+  - `client_service.go`: `container.ClientService`, the per-host contract the rest of the app uses
+  - `store.go`: the container cache docker and k8s share (its header comment explains who
+    may write to the map), split by concern into `store_events.go` (the event loop),
+    `store_refresh.go` (reconnect, list and reconcile) and `store_fanout.go`
+    (bounded delivery to subscribers)
+  - `collector_lifecycle.go`: the lazy start/idle-stop reference count both stats collectors use
+  - `logparse/`: the log pipeline both platforms feed (`event_generator.go` grouping and JSON
+    detection, `level_guesser.go`, `logfmt.go`, `timestamp_prefix.go`)
+  - One folder per platform, each holding that platform end to end:
+    - `docker/`: `client.go`, `log_reader.go`, `stats_collector.go`, and `service.go` (`docker.Service`)
+    - `k8s/`: `client.go`, `log_reader.go`, `stats_collector.go`, and `service.go` (`k8s.Service`)
+    - `agent/`: gRPC `client.go`/`server.go`, `convert.go` (proto conversion), `service.go`, and
+      generated `pb/` (protos in `protos/`)
 
-- **`internal/agent/`** - gRPC agent for multi-host support
-  - Uses Protocol Buffers (protos defined in `protos/`)
-  - Enables distributed log collection across Docker hosts
+- **`internal/hostservice/`** - Orchestration across hosts, one per deployment mode
+  - `multi_host.go`: `MultiHostService` (server and swarm modes)
+  - `retriable_client_manager.go` (server), `swarm_client_manager.go` (swarm)
+  - `k8s_cluster.go`: `K8sClusterService` (k8s mode)
+
+- **`internal/cli/`** - Command-line parsing, subcommands, client wiring (`clients.go`)
 
 - **`internal/cloud/`** - Dozzle Cloud integration (tool execution engine)
   - `client.go`: Bidirectional gRPC stream client with auto-reconnect and exponential backoff
@@ -138,22 +248,10 @@ The Go backend is organized into these key packages:
   - `tools_helpers.go`: Proto conversion utilities and host name resolution
   - Uses `protos/cloud.proto` for service and message definitions
 
-- **`internal/k8s/`** - Kubernetes client support
-  - Alternative to Docker client for k8s deployments
-
-- **`internal/support/`** - Support utilities
-  - `cli/`: Command-line argument parsing and validation
-  - `docker/`: Multi-host Docker management and Swarm support (`docker_service.go`, client managers)
-  - `k8s/`: Kubernetes service abstractions
-  - `web/`: Web service utilities
-
 - **`internal/auth/`** - Authentication providers
   - Simple file-based auth (`simple.go`)
   - Forward proxy auth (`proxy.go`)
   - Role-based authorization (`roles.go`)
-
-- **`internal/container/`** - Container domain models and interfaces
-  - `event_generator.go`: Log parsing and grouping logic (multi-line, JSON detection)
 
 - **`internal/notification/`** - Alert and notification system
   - `manager.go`: Notification rule evaluation and dispatching
@@ -174,20 +272,19 @@ The frontend uses file-based routing with these conventions:
   - `stack/[name].vue`: Docker stack logs
   - `group/[name].vue`: Custom grouped logs
 
-- **`assets/components/`** - Vue components (auto-imported)
-  - `LogViewer/`: Core log viewing components
-    - `SimpleLogItem.vue`: Single-line log entries
-    - `ComplexLogItem.vue`: JSON/structured log entries
-    - `GroupedLogItem.vue`: Multi-line grouped log entries
-    - `ContainerEventLogItem.vue`: Container lifecycle events
-    - `SkippedEntriesLogItem.vue`: Placeholder for skipped logs
-    - `LoadMoreLogItem.vue`: Load more historical logs
-  - `ContainerViewer/`: Container-specific UI
-  - `common/`: Reusable UI components
-  - `BarChart.vue`: Lightweight bar chart with automatic downsampling
-  - `HostCard.vue`: Host overview card with metrics
-  - `MetricCard.vue`: Reusable metric display component
-  - `ContainerTable.vue`: Container table with historical stat visualization
+- **`assets/components/`** - Vue components (auto-imported). See "Where files go" below.
+  - `ui/`: generic primitives (`BarChart.vue`, `MetricCard.vue`, `Popover.vue`, `UsageMeter.vue`, ...)
+  - `shell/`: app frame and the singletons `layouts/default.vue` mounts once
+  - `nav/`: everything inside the sidebar
+  - `search/`: the command palette and search surfaces
+  - `containers/`: `ContainerTable.vue`, the toolbar, the terminal
+  - `hosts/`: `HostCard.vue` and friends
+  - `logs/`: the stream, with `logs/entries/` holding one file per `LogEntry` type
+    (`SimpleLogItem.vue`, `ComplexLogItem.vue`, `GroupedLogItem.vue`,
+    `ContainerEventLogItem.vue`, `SkippedEntriesLogItem.vue`, `LoadMoreLogItem.vue`)
+  - `views/`: one file per route that renders a log view, mounted by `assets/pages/`
+  - `notifications/`: the rules the user wrote
+  - `cloud/`: memory, cross-instance and account, split into `rail/`, `chat/`, `history/`
 
 - **`assets/stores/`** - Pinia stores (auto-imported)
   - `config.ts`: App configuration and feature flags (injected from backend HTML, frozen immutable)
@@ -198,15 +295,19 @@ The frontend uses file-based routing with these conventions:
   - `swarm.ts`, `k8s.ts`: Deployment mode-specific state
   - `announcements.ts`: Feature announcements
 
-- **`assets/composable/`** - Vue composables (auto-imported)
-  - `eventStreams.ts`: SSE connection management with buffer-based flushing (250ms debounce)
-  - `historicalLogs.ts`: Historical log fetching
-  - `logContext.ts`: Log filtering and search context (provide/inject pattern)
-  - `scrollContext.ts`: Scroll state management (paused, progress, currentDate)
-  - `storage.ts`: LocalStorage abstractions with reactivity
-  - `visible.ts`: Log filtering by visible keys for complex logs
-  - `containerActions.ts`: Container control operations
-  - `duckdb.ts`: DuckDB WASM for SQL queries on logs
+- **`assets/composable/`** - Vue composables (auto-imported), foldered to mirror the components
+  - `ui/`: `popover.ts`, `media.ts`, `timeTicker.ts` - no domain knowledge
+  - `app/`: shell and global session state (`drawer.ts`, `theme.ts`, `toast.ts`, ...)
+  - `logs/`: the stream pipeline (`eventStreams.ts` SSE with 250ms buffered flushing,
+    `historicalLogs.ts`, `logContext.ts` provide/inject, `scrollContext.ts`,
+    `visible.ts`, `duckdb.ts` for SQL over logs)
+  - `containers/`: `containerActions.ts`, `imageUpdate.ts`, ...
+  - `cloud/`, `notifications/`, `editor/`
+
+  The `AutoImport` `dirs` glob is `assets/composable/**`. It must stay recursive: a bare
+  directory is scanned one level deep, and nested composables silently stop being
+  auto-imported with no error. The `**` also globs `*.spec.ts`, which is harmless only
+  while no spec exports anything.
 
 - **`assets/modules/`** - Vue plugins
   - `router.ts`: Vue Router configuration
@@ -215,7 +316,7 @@ The frontend uses file-based routing with these conventions:
 
 ### Communication Flow
 
-1. **Real-time Logs**: Frontend establishes SSE connections to `/api/hosts/{host}/containers/{id}/logs/stream`
+1. **Real-time Logs**: Frontend establishes SSE connections to `/api/containers/logs/stream?container={host}/{id}` (repeated for a merged view)
 2. **Container Events**: SSE stream at `/api/events/stream` pushes container lifecycle events
 3. **Stats**: Real-time CPU/memory stats streamed via SSE alongside events
 4. **Actions**: POST to `/api/hosts/{host}/containers/{id}/actions/{action}` (start/stop/restart)
@@ -227,6 +328,193 @@ The frontend uses file-based routing with these conventions:
 - **Backend**: Embeds `dist/` using Go embed directive
 - **Hot Reload**: In development, `DEV=true` disables embedded assets, `LIVE_FS=true` serves from filesystem
 - **Makefile**: Orchestrates builds and dependency generation
+
+## Dozzle and Dozzle Cloud
+
+Cloud features are folded into the Dozzle UI rather than linked to. The split that
+decides where a feature lands:
+
+> **Dozzle owns anything about the container in front of the user. Cloud owns
+> anything that is history, cross-instance, or account.**
+
+Dozzle is optimized for the current view and can act on it; Cloud reviews everything
+at once. When a feature could live in either, ask which of those two questions it
+answers.
+
+### Naming
+
+The two Cloud surfaces must not blur into each other:
+
+- **Notifications** — the rules the user wrote, and what those rules did.
+- **Findings** — the rules the user never wrote, that Cloud noticed anyway.
+
+Findings are not alerts and are never listed alongside them.
+
+### What Cloud adds is memory, not features
+
+Nothing Dozzle does locally today ever gets gated. Alerts already splice into the log
+stream (`AlertLogItem.vue`), they just die on refresh because nothing remembers them.
+Cloud's contribution is that the same thing survives a reload, a restart, and a week —
+which is why an alert can come back later as a dot on a container row.
+
+So a Cloud-less install shows an empty history section with one muted line saying what
+it would hold, not a locked card. A surface that has no local half at all (a findings
+list) is mounted only when cloud is configured, rather than existing as a permanent
+upsell page in the nav.
+
+### Linking out
+
+Linking out to Cloud is fine, and expected, for anything Cloud genuinely does better:
+billing and keys, the report archive, cross-instance rollups, deep-investigation
+transcripts. `AlertHit.url` in `protos/cloud.proto` already carries the deep link.
+
+Never link out for something Dozzle could answer against the stream already on screen.
+"Show me the lines" — driving the historical scroll to the window a finding or alert
+describes — is the whole reason these surfaces live in Dozzle at all.
+
+### Gating
+
+Plan decisions are computed server-side in Cloud and handed to Dozzle already decided
+(`fixLocked`), never inferred from missing data — absence read as tier is how a paying
+customer gets shown an upsell for what they already bought. Dozzle renders the gate it
+is given and branches on nothing beyond `isPro` for cosmetics.
+
+One upsell surface: `CloudPopover`. Everywhere else stays silent, per the design
+system's rule that `primary` is reserved for the single action a surface wants you to
+take — a findings drawer wants "Show me the lines", not "Upgrade".
+
+## Design System
+
+The UI is being converged on one visual language: clean, flat, and quiet. New or
+redesigned surfaces follow these rules; when touching an old surface, bring it along
+rather than matching what is already there.
+
+### Surfaces
+
+- A grouped surface is a **neutral panel**: `rounded-lg border border-base-content/15 bg-base-200/40`,
+  with rows separated by `divide-y divide-base-content/10`. Padding is `p-4` per row,
+  `p-2` for a row of link items. No shadows, no gradients, no `--depth`.
+- Floating surfaces (dropdowns, popovers, toasts) use `rounded-box border border-base-content/10 bg-base-200`
+  with `shadow-sm`/`shadow-lg`. `nav-menu-panel` in `main.css` is the sidebar's version.
+- Inside a panel, a hairline `<div class="bg-base-content/10 h-px">` separates blocks when
+  `divide-y` does not apply (e.g. inside a dropdown's flow).
+- Interactive rows are `hover:bg-base-300 rounded-md px-2 py-1.5 transition-colors`, with a
+  leading icon at `size-4 opacity-60` and a trailing `mdi:open-in-new size-3.5 opacity-40`
+  when the row leaves the app.
+
+### Color and severity
+
+- **Severity rides on the icon, never on the surface.** A tinted circle
+  (`bg-error/10 text-error`, `bg-warning/10 text-warning`, `bg-info/10 text-info`) plus a
+  status dot carries the state; the panel behind it stays neutral so the text keeps full
+  contrast. Do not use daisyUI `alert alert-error` / `alert-warning` / `alert-success`:
+  a saturated block at drawer or page width shouts over everything near it.
+- Use `InlineNotice` (`assets/components/ui/InlineNotice.vue`) for an in-page notice and
+  `ToastModal` for a floating one. Both are neutral panels with a tinted glyph.
+- Status text is a `status-pill` (see `main.css`): a bordered, uppercase, mono chip in
+  `neutral`, `success`, `primary`, `secondary`, `warning` or `error`. Prefer it to `badge`.
+- `primary` is reserved for the single action a surface wants you to take. Two solid
+  primary buttons in one panel is a bug; the secondary one is a plain `btn`, and a
+  destructive secondary is `btn text-error`, not `btn-error`.
+
+### Typography and density
+
+- Body `text-sm`, secondary copy `text-base-content/60`, footnotes `text-xs` at
+  `text-base-content/40`. Drawer and page titles are `text-2xl font-bold` with a
+  `text-base-content/60` subtitle underneath.
+- Section headings inside a form are `FormStepHeading` (numbered chip + uppercase label);
+  standalone section headings are `text-base-content/60 font-semibold tracking-wide uppercase`.
+- Numbers, keys, IDs, periods, and percentages are `font-mono`. Emphasize the meaningful
+  half and mute the rest (`font-semibold` used, `text-base-content/40` for `/ limit`).
+- A read-only value is text, not a disabled input. Label left, mono value right.
+
+### Meters and charts
+
+- Usage meters are `UsageMeter` (`assets/components/ui/UsageMeter.vue`): a
+  `bg-base-content/10 h-1.5 rounded-full` track with a `bg-primary` fill that turns
+  `bg-warning` past 70% and `bg-error` past 90%. Do not use daisyUI `<progress>` for these;
+  it is taller than the type around it and carries its own palette.
+- Charts stay custom and lightweight (`BarChart.vue`); no chart library.
+
+### Affordances
+
+- Tailwind v4's preflight sets `cursor: default` on buttons, so a control reads as
+  painted on unless something puts the pointer back. One base-layer rule in `main.css`
+  does that for `button`, `summary`, `select`, `[role="button"]`, `.btn` and
+  checkbox/radio labels, skipping disabled ones. Never add `cursor-pointer` to a new
+  button; if a clickable thing still shows an arrow, it is a `div` pretending to be a
+  button and the fix is to make it a `<button>`.
+- Anything clickable needs a hover state and a hit area a pointer can find. Under ~24px
+  the painted box is not the target: draw the hit area with an `::after` inset so
+  the layout around it does not move (`AlertDot.vue`).
+
+### Motion
+
+- Transitions are `transition-colors` on hover, `duration-500` on a meter's width, and
+  `200ms cubic-bezier(0.34, 1.56, 0.64, 1)` for the icon spring in `main.css`.
+- Icon-only buttons opt into the spring with `btn-circle`, `btn-square` or `icon-btn`; the
+  flavours (`icon-float`, `icon-spin`, `icon-wiggle`, `icon-ring`) are set on the glyph.
+- Every animation has a `prefers-reduced-motion` escape.
+
+### Mobile
+
+- Under `isMobile` the shell is a floating tab bar (`shell/MobileTabBar.vue`: Home, Browse,
+  Notifications, Settings, plus a separate search button). A log route is a pushed screen:
+  no tab bar, and `ScrollableView`'s header carries a back button. Which routes count as log
+  routes is `LOG_ROUTES` in `composable/app/mobileShell.ts`; a new log view goes there.
+- Floating chrome on a phone uses the `frosted` utility (translucent fill + backdrop blur),
+  which falls back to a solid `base-200` without `backdrop-filter` or under
+  `prefers-reduced-transparency`. It is a fill only; add the border and shadow yourself. Do
+  not use daisyUI's `glass`, which paints a diagonal sheen. Panels and rows stay flat.
+- A menu that is an action list opens as a bottom sheet on a phone: pass `sheet` to `Popover`.
+
+### Consistency rules
+
+- A panel keeps its shape across states. Loading, error and healthy branches of the same
+  surface share the header, dividers and footer so nothing reshuffles when state changes.
+- The same concept looks the same everywhere. The cloud account panel is the same parts at
+  three widths: `CloudPopover.vue` (compact), `CloudSettingsCard.vue`, and
+  `notifications/CloudDestinationForm.vue`. When a fourth surface needs it, extract a
+  component instead of copying the classes.
+- Do not repeat the container's title inside its own content: a drawer header already names
+  the thing, so the panel below leads with what the header cannot say.
+- Drawer footers are sticky, opaque and full-bleed, bled over the drawer's `p-6` and padded
+  clear of the home indicator:
+  `bg-base-100 border-base-content/10 sticky -bottom-6 z-10 -mx-6 -mb-6 mt-auto border-t px-10 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]`
+  (widen `-mx`/`-mb` by any padding the occupant adds of its own).
+
+## Where files go
+
+Four tests for a new component, applied in order. The first that matches decides the
+folder, so a contributor never has to ask.
+
+1. **`ui/`** — it imports nothing under `@/` except `@/composable/ui/`, **and** its name
+   carries no Dozzle noun (container, host, log, alert, cloud, nav, swarm, k8s, stack,
+   service, chat, rail). `ui/` means "would still build pasted into a different Vue app".
+   It does not mean "shared" and it does not mean "small": a `ui/` component with one
+   consumer is fine, and a large domain component with six consumers still lives in its
+   feature folder. Genericity is the test, popularity is not.
+2. **`cloud/`** — the surface does not exist at all in a cloud-less install. Two carve-outs,
+   settled once: anything `assets/models/LogEntry.ts` registers is a log entry and stays in
+   `logs/entries/` with its siblings, `AlertLogItem.vue` included, because alerts splice
+   into the local stream. And a variant that plugs into a local form stays with that form,
+   which is why `CloudDestinationForm.vue` sits beside `WebhookDestinationForm.vue`.
+3. **`views/`** — a file in `assets/pages/` mounts it as that route's whole body. One file
+   per route. (`ContainerLog.vue` is also mounted by `layouts/default.vue` for pinned
+   columns; it is still that route's view.)
+4. Otherwise the **feature folder** named by the noun in the component's own name.
+
+`nav/` is everything inside the sidebar; `shell/` is the frame that positions it. Nest one
+level inside a feature folder only past ~15 files and only with an obvious sub-noun, never
+two. A spec moves with its subject. `assets/composable/` uses the same folder names and the
+same first two tests.
+
+`components/ui/` may depend on `composable/ui/` and third-party code, and nothing else.
+That is the one dependency edge worth enforcing in review.
+
+Moving a component is cheap: `unplugin-vue-components` runs without `directoryAsNamespace`,
+so a component's name is its filename and nesting is invisible to every template. It also
+means **two components may never share a basename**, at any depth.
 
 ## Important Development Notes
 
@@ -258,9 +546,13 @@ The frontend uses file-based routing with these conventions:
 - Protocol buffer generation happens via `go generate` directive in `main.go`
 - Docker client uses API version negotiation for compatibility
 - **Service Layer Architecture**:
-  - `ClientService` interface abstracts Docker/K8s/Agent backends
-  - `MultiHostService` orchestrates multi-host operations
+  - `container.ClientService` interface abstracts Docker/K8s/Agent backends
+  - `hostservice.MultiHostService` orchestrates multi-host operations
   - `ClientManager` implementations: `RetriableClientManager` (server mode), `SwarmClientManager` (swarm mode)
+- **Where backend code goes**: code that only one platform needs lives in `internal/container/<platform>/`;
+  code docker and k8s share lives in `internal/container/` (or `logparse/` for the log pipeline);
+  code that coordinates several hosts lives in `internal/hostservice/`. `internal/container` never
+  imports a platform package, and platforms never import each other.
 
 ### Authentication
 
@@ -287,6 +579,7 @@ The frontend uses file-based routing with these conventions:
 
 - `dev.dozzle.name`: Custom container display name
 - `dev.dozzle.group`: Group containers together
+- `dev.dozzle.url`: Link a container to its own web UI (http/https only; `Container.url` in `assets/models/Container.ts`)
 - Label-based filtering throughout the application
 
 ### Deployment Modes
@@ -299,7 +592,7 @@ The frontend uses file-based routing with these conventions:
 - **K8s mode**: Pod log monitoring in Kubernetes cluster
   - Implements `container.Client` interface via Kubernetes API
 - **Agent mode**: Lightweight gRPC agent for remote log collection
-  - Run with `dozzle agent` or `pnpm run agent:dev`
+  - Run with `dozzle agent` or `bun run agent:dev`
   - Listens on port 7007 with TLS certificate authentication
 
 ## Key Architectural Patterns
@@ -311,20 +604,21 @@ The backend follows a clean layered architecture:
 ```
 HTTP Handlers (internal/web)
     ↓
-HostService Interface (MultiHostService)
+HostService Interface (internal/hostservice)
     ↓
-ClientService Interface (per host)
+container.ClientService Interface (per host)
     ↓
 container.Client Interface
     ↓
-Implementation (DockerClient, K8sClient, AgentClient)
+Implementation (internal/container/{docker,k8s,agent})
 ```
 
 **When adding new container operations:**
 
 1. Define method in `container.Client` interface (`internal/container/client.go`)
-2. Implement in `internal/docker/client.go` (and `internal/k8s/client.go` if applicable)
-3. Add wrapper method in `ClientService` interface (`internal/support/docker/docker_service.go`)
+2. Implement in `internal/container/docker/client.go` (and `internal/container/k8s/client.go` if applicable)
+3. Add it to `container.ClientService` (`internal/container/client_service.go`) and implement it in each
+   platform's `service.go` (`docker/`, `k8s/`, `agent/`)
 4. Add HTTP handler in `internal/web/` with appropriate route
 
 ### Frontend Data Flow
@@ -333,7 +627,7 @@ Implementation (DockerClient, K8sClient, AgentClient)
 
 1. User navigates to `/container/{id}` route
 2. Page component calls `useContainerStream(container)` composable
-3. Composable creates EventSource connection to `/api/hosts/{host}/containers/{id}/logs/stream`
+3. Composable creates EventSource connection to `/api/containers/logs/stream?container={host}/{id}` (repeated for a merged view)
 4. Backend streams `LogEvent` objects via SSE
 5. Frontend buffers events (250ms debounce, max 1000ms)
 6. Batched buffer flushes update reactive `messages` array
@@ -353,9 +647,9 @@ Implementation (DockerClient, K8sClient, AgentClient)
 1. Main server creates `agent.NewClient(endpoint, certs)` for each remote host
 2. AgentClient implements `container.Client` interface
 3. Method calls translate to gRPC requests defined in `protos/rpc.proto`
-4. Remote agent receives gRPC call, delegates to local `DockerClient`
+4. Remote agent receives gRPC call, delegates to local `docker.Client`
 5. Streaming RPCs (logs, stats, events) use bidirectional channels
-6. Responses converted back to domain models via `FromProto()` methods
+6. Responses converted back to domain models in `internal/container/agent/convert.go`
 
 ### Cloud Tool Execution Flow
 
@@ -370,8 +664,8 @@ Implementation (DockerClient, K8sClient, AgentClient)
 ### Log Parsing Pipeline
 
 1. Docker API returns multiplexed stream (8-byte headers + payload)
-2. `log_reader.go` parses headers, extracts stdout/stderr type
-3. `event_generator.go` receives raw log lines
+2. `container/docker/log_reader.go` parses headers, extracts stdout/stderr type
+3. `container/logparse/event_generator.go` receives raw log lines
 4. Detection logic identifies:
    - JSON structure → `ComplexLogEntry`
    - Multi-line patterns (stack traces) → `GroupedLogEntry`
@@ -395,7 +689,7 @@ Implementation (DockerClient, K8sClient, AgentClient)
 ### Adding a New Log View Type
 
 1. Create route file in `assets/pages/` (e.g., `custom/[id].vue`)
-2. Create composable in `assets/composable/eventStreams.ts` (e.g., `useCustomStream()`)
+2. Create composable in `assets/composable/logs/eventStreams.ts` (e.g., `useCustomStream()`)
 3. Composable should:
    - Build API URL with appropriate filters
    - Create EventSource connection
@@ -407,9 +701,9 @@ Implementation (DockerClient, K8sClient, AgentClient)
 ### Adding Container Stats/Metrics
 
 1. Add field to `Stat` type in `internal/container/types.go`
-2. Update `stats_collector.go` to extract metric from Docker API response
-3. Add calculation logic in `docker/calculation.go` if needed
-4. Ensure protobuf definition includes field in `protos/rpc.proto`
+2. Update `container/docker/stats_collector.go` (and `container/k8s/stats_collector.go`) to extract the metric
+3. Add calculation logic in `container/docker/calculation.go` if needed
+4. Ensure protobuf definition includes field in `protos/rpc.proto`, and map it in `container/agent/convert.go`
 5. Frontend automatically receives updates via existing SSE stream
 6. Update `Container` model in `assets/models/Container.ts` if UI needs access
 
@@ -422,7 +716,7 @@ Implementation (DockerClient, K8sClient, AgentClient)
 - `types.go`: Alert rule definitions (log pattern matching, thresholds)
 - `dispatcher/`: Notification channel implementations
 
-**Frontend** (`assets/pages/notifications.vue`, `assets/components/Notification/`):
+**Frontend** (`assets/pages/notifications.vue`, `assets/components/notifications/`):
 
 - `AlertForm.vue`, `DestinationForm.vue`: UI for creating rules
 - Rules persisted to `./data/notifications.yml` via `internal/notification/persist.go`
@@ -432,7 +726,7 @@ Implementation (DockerClient, K8sClient, AgentClient)
 
 1. Implement dispatcher interface in `internal/notification/dispatcher/`
 2. Register in `manager.go` dispatcher factory
-3. Add UI form in `assets/components/Notification/DestinationForm.vue`
+3. Add UI form in `assets/components/notifications/DestinationForm.vue`
 
 ### Adding a New Cloud Tool
 

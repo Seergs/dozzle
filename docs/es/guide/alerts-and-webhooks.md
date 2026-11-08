@@ -1,0 +1,335 @@
+---
+title: Alertas
+description: Configura alertas de Dozzle sobre los logs de contenedores Docker, las métricas de CPU y memoria y los eventos del ciclo de vida, y envíalas a un webhook, Slack, Discord o ntfy.
+sourceHash: 5a3bc907b39a
+---
+
+# Alertas
+
+Dozzle puede vigilar los logs de los contenedores, las métricas de recursos y los eventos del ciclo de vida, y avisarte cuando se cumple la condición que describas. Las reglas se escriben como expresiones, se evalúan en tu propia instancia y se entregan a un webhook, a Slack, a Discord o a ntfy.
+
+Las reglas viven siempre aquí, en la instancia autoalojada, porque es donde están tus logs. Si has vinculado la instancia a [Dozzle Cloud](/es/guide/dozzle-cloud), esas mismas reglas la alimentan, y la entrega (agrupación, resúmenes, silenciado, canales móviles) se configura allí en lugar de por destino aquí abajo.
+
+## <Icon icon="mdi:format-list-bulleted-type" inline /> Tipos de alerta
+
+Dozzle admite tres tipos de alerta, todos se configuran igual desde la página de **Notificaciones**:
+
+| Tipo                               | Se dispara con                                    | Caso de uso de ejemplo                 |
+| ---------------------------------- | ------------------------------------------------- | -------------------------------------- |
+| [**Log**](#alertas-de-log)         | Un mensaje de log que coincide con un patrón      | Errores 5xx, trazas de pila            |
+| [**Métrica**](#alertas-de-metrica) | CPU o memoria que cruza un umbral                 | Un contenedor que supera el 90% de CPU |
+| [**Evento**](#alertas-de-evento)   | Eventos de ciclo de vida del contenedor en Docker | OOM kills, contenedores no saludables  |
+
+Cada alerta combina una **expresión de contenedor** (qué contenedores vigilar) con una **expresión de disparo** (la condición que la activa).
+
+> [!IMPORTANT]
+> La configuración de alertas y destinos se guarda en el directorio `/data`. Tienes que montar ese directorio como volumen para conservar los ajustes de notificación entre reinicios del contenedor.
+
+::: code-group
+
+```sh
+docker run -v /var/run/docker.sock:/var/run/docker.sock -v /path/to/data:/data -p 8080:8080 amir20/dozzle:latest
+```
+
+```yaml [docker-compose.yml]
+services:
+  dozzle:
+    image: amir20/dozzle:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /path/to/data:/data
+    ports:
+      - 8080:8080
+```
+
+:::
+
+## <Icon icon="mdi:send-outline" inline /> Configurar un destino
+
+Antes de crear alertas necesitas configurar al menos un destino de notificación. Ve a la página de **Notificaciones** en Dozzle y pulsa **Añadir destino**.
+
+### Webhook
+
+Los webhooks envían una petición HTTP POST a la URL que elijas. Dozzle incluye plantillas de payload para servicios populares:
+
+- **Slack**, con formato de bloques y markdown
+- **Discord**, con formato para la API de webhooks de Discord
+- **ntfy**, con formato para las notificaciones push de [ntfy.sh](https://ntfy.sh)
+- **Personalizado**, un payload JSON genérico que puedes adaptar
+
+También puedes escribir tu propia plantilla de payload con la sintaxis `text/template` de Go. Estas son las variables disponibles:
+
+<div v-pre>
+
+| Variable                  | Descripción                                      | Alertas |
+| ------------------------- | ------------------------------------------------ | ------- |
+| `{{.Detail}}`             | Resumen (mensaje de log o valores de la métrica) | todas   |
+| `{{.Container.Name}}`     | Nombre del contenedor                            | todas   |
+| `{{.Container.Image}}`    | Imagen del contenedor                            | todas   |
+| `{{.Container.HostName}}` | Nombre del host de Docker                        | todas   |
+| `{{.Container.State}}`    | Estado del contenedor                            | todas   |
+| `{{.Log.Message}}`        | Contenido del mensaje de log                     | log     |
+| `{{.Log.Level}}`          | Nivel del log                                    | log     |
+| `{{.Log.Timestamp}}`      | Marca de tiempo del log                          | log     |
+| `{{.Log.Stream}}`         | Tipo de flujo (stdout/stderr)                    | log     |
+| `{{.Stat.CPUPercent}}`    | Porcentaje de uso de CPU                         | métrica |
+| `{{.Stat.MemoryPercent}}` | Porcentaje de uso de memoria                     | métrica |
+| `{{.Stat.MemoryUsage}}`   | Uso de memoria en bytes                          | métrica |
+| `{{.Event.Name}}`         | Nombre del evento (alertas de evento)            | evento  |
+| `{{.Event.Attributes}}`   | Mapa de atributos del evento (alertas de evento) | evento  |
+| `{{.Subscription.Name}}`  | Nombre de la regla de alerta                     | todas   |
+| `{{.Timestamp}}`          | Momento en que se creó la notificación           | todas   |
+
+`.Log`, `.Stat` y `.Event` solo tienen valor en su propio tipo de alerta. Un destino recibe todos los tipos, así que una plantilla que lee `{{.Log.Level}}` falla al enviar alertas de métricas y de eventos, incluidos los avisos de actualización. Protege esos campos con `{{ with .Log }}{{ .Level }}{{ end }}`, o usa `{{.Detail}}`, que todas las alertas incluyen. El botón **Probar** avisa cuando la plantilla falla para un tipo de alerta que no envió.
+
+`{{.Timestamp}}` se imprime en el formato de hora por defecto de Go, que servicios como Discord rechazan. Formatéalo como ISO 8601:
+
+```json
+{
+  "embeds": [{ "timestamp": "{{ .Timestamp.UTC.Format `2006-01-02T15:04:05Z07:00` }}" }]
+}
+```
+
+</div>
+
+> [!TIP]
+> Usa el botón **Probar** para comprobar que tu webhook funciona antes de guardarlo.
+
+#### Mantener la URL fuera del archivo
+
+Las URL de webhook de Slack, Discord y servicios similares contienen el token. Para mantener `notifications.yml` en control de versiones, pon la URL en una variable de entorno y haz referencia a ella con `${VAR}` en la URL o en cualquier valor de cabecera. También funciona al escribirlo en el formulario.
+
+```yaml
+dispatchers:
+  - id: 1
+    name: Slack
+    type: webhook
+    url: ${SLACK_WEBHOOK_URL}
+    headers:
+      Authorization: Bearer ${NTFY_TOKEN}
+```
+
+Dozzle guarda y muestra el marcador tal cual. El valor se lee al enviar una notificación, desde el entorno del Dozzle que la envía. Con [agentes](/es/guide/agent), las alertas de los contenedores de un agente las envía ese agente, así que define la variable también en cada agente. Si falta ahí, el envío falla con `environment variable ... is not set`.
+
+Solo se expande la forma `${VAR}`; un `$VAR` suelto se deja igual. Se rechazan las variables que empiezan por `DOZZLE_`, `AWS_`, `GOOGLE_`, `AZURE_`, `KUBERNETES_` o `DOCKER_`, porque quien puede editar un webhook decide a dónde envía. Cualquier otra variable del entorno de Dozzle se puede leer así, así que no guardes ahí secretos que no tengan relación.
+
+### Dozzle Cloud <CloudBadge />
+
+Las instancias vinculadas obtienen **Dozzle Cloud** como destino automáticamente. A diferencia de un webhook simple, agrupa los fallos repetidos en una sola notificación, resume lo que ha pasado y reparte a correo, Telegram, Discord, Slack, ntfy y notificaciones del navegador sin configurar cada uno aquí. Consulta [Dozzle Cloud](/es/guide/dozzle-cloud).
+
+## <Icon icon="mdi:plus-circle-outline" inline /> Crear una alerta
+
+Ve a la página de **Notificaciones** y pulsa **Añadir alerta**. Toda alerta tiene una **expresión de contenedor** y, además, una expresión de disparo de tipo **log**, **métrica** o **evento**.
+
+### Expresión de contenedor
+
+La expresión de contenedor selecciona qué contenedores vigilar. Propiedades disponibles:
+
+| Propiedad  | Tipo   | Ejemplo                         |
+| ---------- | ------ | ------------------------------- |
+| `name`     | cadena | `name contains "api"`           |
+| `image`    | cadena | `image == "nginx:latest"`       |
+| `state`    | cadena | `state == "running"`            |
+| `health`   | cadena | `health == "unhealthy"`         |
+| `hostName` | cadena | `hostName == "prod-host"`       |
+| `labels`   | mapa   | `labels["env"] == "production"` |
+
+Puedes combinar condiciones con `&&` (Y), `||` (O) y `!` (NO):
+
+```
+name contains "api" && labels["env"] == "production"
+```
+
+## <Icon icon="mdi:text-search" inline /> Alertas de log
+
+### Expresión de log
+
+La expresión de log filtra qué mensajes de log disparan la alerta. Propiedades disponibles:
+
+| Propiedad | Tipo        | Ejemplo                    |
+| --------- | ----------- | -------------------------- |
+| `message` | cadena/mapa | `message contains "error"` |
+| `level`   | cadena      | `level == "error"`         |
+| `stream`  | cadena      | `stream == "stderr"`       |
+| `type`    | cadena      | `type == "complex"`        |
+
+En los logs JSON puedes acceder a campos anidados con notación de punto:
+
+```
+message.status >= 500 && message.path contains "/api"
+```
+
+Entre los operadores de cadena admitidos están `contains`, `startsWith`, `endsWith` y `matches` (expresión regular).
+
+### Ejemplos de log
+
+**Alertar de todos los errores de los contenedores de producción:**
+
+```
+Container: labels["env"] == "production"
+Log:       level == "error"
+```
+
+**Alertar de errores HTTP 5xx en los contenedores de API:**
+
+```
+Container: name contains "api"
+Log:       message.status >= 500
+```
+
+**Alertar de cualquier salida por stderr de una imagen concreta:**
+
+```
+Container: image startsWith "myapp/"
+Log:       stream == "stderr"
+```
+
+**Alertar de respuestas lentas de la API en producción:**
+
+```
+Container: name contains "api" && labels["env"] == "production"
+Log:       message.duration > 5000 && message.path contains "/api"
+```
+
+**Alertar de fallos de autenticación con una expresión regular:**
+
+```
+Container: name contains "auth" || name contains "gateway"
+Log:       message matches "(?i)(unauthorized|forbidden|invalid token)"
+```
+
+> [!NOTE]
+> El editor de alertas incluye autocompletado y validación en tiempo real. Puedes previsualizar los contenedores y logs que coinciden antes de guardar.
+
+## <Icon icon="mdi:chart-line" inline /> Alertas de métrica
+
+Las alertas de métrica se disparan cuando el uso de CPU o memoria de un contenedor cruza un umbral. La expresión de disparo se evalúa sobre una media suavizada de las estadísticas tomadas en una ventana móvil, lo que evita falsas alarmas por picos breves.
+
+### Expresión de métrica
+
+Propiedades disponibles:
+
+| Propiedad     | Tipo   | Descripción                                                |
+| ------------- | ------ | ---------------------------------------------------------- |
+| `cpu`         | número | Porcentaje de uso de CPU (0-100), igual que en la interfaz |
+| `memory`      | número | Porcentaje de uso de memoria (0-100)                       |
+| `memoryUsage` | número | Uso de memoria en bytes                                    |
+
+### Enfriamiento y ventana de muestreo
+
+- **Ventana de muestreo**: cuántos segundos de estadísticas se promedian antes de evaluar la expresión. Las ventanas largas suavizan los picos; las cortas reaccionan más rápido.
+- **Enfriamiento**: segundos mínimos entre dos disparos consecutivos para el mismo contenedor. Evita una avalancha de alertas cuando un contenedor se mantiene por encima del umbral.
+
+### Ejemplos de métrica
+
+**CPU alta en los contenedores de producción:**
+
+```
+Container: labels["env"] == "production"
+Metric:    cpu > 90
+```
+
+**Presión de memoria en un servicio concreto:**
+
+```
+Container: name contains "api"
+Metric:    memory > 85
+```
+
+**Uso absoluto de memoria (1 GiB):**
+
+```
+Container: name == "postgres"
+Metric:    memoryUsage > 1073741824
+```
+
+## <Icon icon="mdi:bell-outline" inline /> Alertas de evento
+
+Las alertas de evento se disparan con los eventos del ciclo de vida de los contenedores de Docker, útiles para detectar caídas, OOM kills y cambios de estado de salud sin analizar logs.
+
+### Expresión de evento
+
+Propiedades disponibles:
+
+| Propiedad    | Tipo   | Descripción                                               |
+| ------------ | ------ | --------------------------------------------------------- |
+| `name`       | cadena | Nombre del evento (ver abajo)                             |
+| `actorId`    | cadena | ID del actor de Docker (normalmente el ID del contenedor) |
+| `attributes` | mapa   | Atributos del evento de Docker (varían según el tipo)     |
+| `timestamp`  | tiempo | Cuándo ocurrió el evento                                  |
+
+Entre los nombres de evento habituales de Docker están `start`, `stop`, `die`, `kill`, `oom`, `restart`, `destroy` y `health_status`.
+
+En los eventos `health_status`, Dozzle expone el estado actual como `attributes["healthStatus"]` (`healthy` o `unhealthy`).
+
+### Actualización disponible
+
+Dozzle también genera un evento `update_available` cuando se publica una imagen más reciente para un contenedor. Una vez al día, a una hora aleatoria, revisa todos los contenedores que no tengan la etiqueta `dev.dozzle.update: off`, y avisa una sola vez por cada imagen nueva. Un reinicio de Dozzle puede repetir una alerta de una actualización que ya envió. La comprobación solo se ejecuta mientras haya al menos una alerta de evento activada, y nunca cuando `--image-check-mode` es `manual` u `off`.
+
+| Atributo         | Descripción                                       |
+| ---------------- | ------------------------------------------------- |
+| `image`          | Referencia de la imagen que ejecuta el contenedor |
+| `currentVersion` | Versión de la imagen en ejecución                 |
+| `latestVersion`  | Versión de la imagen más reciente                 |
+| `currentDigest`  | Digest de la imagen en ejecución                  |
+| `latestDigest`   | Digest de la imagen más reciente                  |
+
+Las versiones salen de la etiqueta `org.opencontainers.image.version` de la imagen. Muchas imágenes no la definen, así que cualquiera de las dos versiones puede estar vacía. Dozzle tampoco lee la versión nueva cuando te queda poco del límite de descargas de Docker Hub.
+
+### Ejemplos de evento
+
+**Alertar cuando muere cualquier contenedor de producción:**
+
+```
+Container: labels["env"] == "production"
+Event:     name == "die"
+```
+
+**Alertar de OOM kills:**
+
+```
+Container: true
+Event:     name == "oom"
+```
+
+**Alertar cuando un contenedor pasa a estar no saludable:**
+
+```
+Container: true
+Event:     name == "health_status" && attributes["healthStatus"] == "unhealthy"
+```
+
+**Alertar cuando hay una imagen más reciente disponible:**
+
+```
+Container: true
+Event:     name == "update_available"
+```
+
+En una plantilla de webhook, las versiones están en `.Event.Attributes`:
+
+<div v-pre>
+
+```
+New version for {{ .Container.Name }}: {{ .Event.Attributes.currentVersion }} -> {{ .Event.Attributes.latestVersion }}
+```
+
+</div>
+
+**Alertar de salidas inesperadas (ignorando los apagados limpios y ordenados):**
+
+Los códigos de salida 0 (éxito), 130 (SIGINT), 143 (SIGTERM) y 137 (SIGKILL) se producen con `docker stop`, Ctrl+C y los ciclos de actualización, así que se excluyen para evitar ruido. Las salidas con error reales (1, 2, 125, ...) siguen alertando.
+
+```
+Container: name contains "worker"
+Event:     name == "die" && !(attributes["exitCode"] in ["0", "130", "143", "137"])
+```
+
+## <Icon icon="mdi:cog-outline" inline /> Gestionar las alertas
+
+Desde la página de Notificaciones puedes:
+
+- **Activar o desactivar** alertas sin borrarlas
+- **Editar** las expresiones y los destinos de una alerta
+- **Ver estadísticas**, incluidos el número de disparos, los contenedores coincidentes y la última vez que se disparó
+- **Borrar** las alertas que ya no necesites

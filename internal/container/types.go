@@ -1,14 +1,16 @@
 package container
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/amir20/dozzle/internal/agent/pb"
 	"github.com/amir20/dozzle/internal/utils"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Container represents an internal representation of docker containers
@@ -20,22 +22,54 @@ type Container struct {
 	Created       time.Time                        `json:"created"`
 	StartedAt     time.Time                        `json:"startedAt"`
 	FinishedAt    time.Time                        `json:"finishedAt"`
-	State         string                           `json:"state"`
-	Health        string                           `json:"health,omitempty"`
+	State         string                           `json:"state" tstype:"ContainerState"`
+	Health        string                           `json:"health,omitempty" tstype:"ContainerHealth"`
 	Host          string                           `json:"host,omitempty"`
 	Tty           bool                             `json:"-"`
 	Labels        map[string]string                `json:"labels,omitempty"`
-	Stats         *utils.RingBuffer[ContainerStat] `json:"stats,omitempty"`
+	Stats         *utils.RingBuffer[ContainerStat] `json:"stats,omitempty" tstype:"StatColumns"`
 	MemoryLimit   uint64                           `json:"memoryLimit"`
 	CPULimit      float64                          `json:"cpuLimit"`
 	Group         string                           `json:"group,omitempty"`
 	Env           []string                         `json:"-"`
-	Ports         []string                         `json:"-"`
+	Ports         []string                         `json:"ports,omitempty"`
 	Mounts        []Mount                          `json:"mounts,omitempty"`
 	MountStats    map[string]MountStat             `json:"mountStats,omitempty"`
 	RestartPolicy string                           `json:"-"`
 	NetworkMode   string                           `json:"-"`
 	FullyLoaded   bool                             `json:"-"`
+	// RestartCount is how many times the engine restarted the container under
+	// its restart policy (Docker) or the kubelet restarted it (k8s). Only an
+	// inspect knows it, so a list entry has 0.
+	RestartCount int `json:"-"`
+	// OOMKilled reports whether the last run ended in an out-of-memory kill.
+	OOMKilled bool `json:"-"`
+	// ExitCode is the last run's exit code; meaningful only once it has exited.
+	ExitCode int `json:"-"`
+	// ImageDigest is the image the container runs, as "repo@sha256:...". Only
+	// k8s fills it, from the pod status; Docker looks up RepoDigests per check.
+	ImageDigest string `json:"-"`
+	// SizeRw is how many bytes the container's writable layer holds. Measuring it
+	// walks the layer, so the size monitor fills it in on its own schedule; nil
+	// until the first measurement.
+	SizeRw *int64 `json:"sizeRw,omitempty"`
+	// Volumes are the Docker-managed volumes the container mounts, with their size.
+	// Docker measures every volume on the host in one walk, so these refresh far less
+	// often than SizeRw. Bind mounts are never here: Docker cannot measure them.
+	Volumes []VolumeUsage `json:"volumes,omitempty"`
+	// Networks are the networks the container is attached to, from its inspect.
+	// A list entry has none.
+	Networks []ContainerNetwork `json:"-"`
+}
+
+// VolumeUsage is one volume a container mounts.
+type VolumeUsage struct {
+	Name        string `json:"name"`
+	Destination string `json:"destination"`
+	Size        int64  `json:"size"`
+	// Links is how many containers use the volume, this one included, so a volume
+	// with Links > 1 is counted in each of their totals.
+	Links int64 `json:"links"`
 }
 
 // Mount represents a container mount point
@@ -44,6 +78,8 @@ type Mount struct {
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
 	RW          bool   `json:"rw"`
+	// Name is the volume's name, empty for a bind mount.
+	Name string `json:"name,omitempty"`
 }
 
 // String returns a display form for legacy consumers.
@@ -61,150 +97,9 @@ type MountStat struct {
 	LastChecked time.Time `json:"lastChecked"`
 }
 
-func (container Container) ToProto() pb.Container {
-	var pbStats []*pb.ContainerStat
-	for _, stat := range container.Stats.Data() {
-		pbStats = append(pbStats, &pb.ContainerStat{
-			Id:             stat.ID,
-			CpuPercent:     stat.CPUPercent,
-			MemoryPercent:  stat.MemoryPercent,
-			MemoryUsage:    stat.MemoryUsage,
-			NetworkRxTotal: stat.NetworkRxTotal,
-			NetworkTxTotal: stat.NetworkTxTotal,
-			DiskReadTotal:  stat.DiskReadTotal,
-			DiskWriteTotal: stat.DiskWriteTotal,
-		})
-	}
-
-	pbMounts := make([]*pb.Mount, 0, len(container.Mounts))
-	for _, m := range container.Mounts {
-		pbMounts = append(pbMounts, &pb.Mount{
-			Type:        m.Type,
-			Source:      m.Source,
-			Destination: m.Destination,
-			Rw:          m.RW,
-		})
-	}
-
-	pbMountStats := make([]*pb.MountStat, 0, len(container.MountStats))
-	for _, ms := range container.MountStats {
-		pbMountStats = append(pbMountStats, &pb.MountStat{
-			Destination: ms.Destination,
-			Total:       ms.Total,
-			Free:        ms.Free,
-			Used:        ms.Used,
-			Available:   ms.Available,
-			LastChecked: timestamppb.New(ms.LastChecked),
-		})
-	}
-
-	return pb.Container{
-		Id:            container.ID,
-		Name:          container.Name,
-		Image:         container.Image,
-		Created:       timestamppb.New(container.Created),
-		State:         container.State,
-		Health:        container.Health,
-		Host:          container.Host,
-		Tty:           container.Tty,
-		Labels:        container.Labels,
-		Group:         container.Group,
-		Started:       timestamppb.New(container.StartedAt),
-		Finished:      timestamppb.New(container.FinishedAt),
-		Stats:         pbStats,
-		Command:       container.Command,
-		MemoryLimit:   container.MemoryLimit,
-		CpuLimit:      container.CPULimit,
-		FullyLoaded:   container.FullyLoaded,
-		Env:           container.Env,
-		Ports:         container.Ports,
-		Mounts:        pbMounts,
-		MountStats:    pbMountStats,
-		RestartPolicy: container.RestartPolicy,
-		NetworkMode:   container.NetworkMode,
-	}
-}
-
-func FromProto(c *pb.Container) Container {
-	var stats []ContainerStat
-	for _, stat := range c.Stats {
-		stats = append(stats, ContainerStat{
-			ID:             stat.Id,
-			CPUPercent:     stat.CpuPercent,
-			MemoryPercent:  stat.MemoryPercent,
-			MemoryUsage:    stat.MemoryUsage,
-			NetworkRxTotal: stat.NetworkRxTotal,
-			NetworkTxTotal: stat.NetworkTxTotal,
-			DiskReadTotal:  stat.DiskReadTotal,
-			DiskWriteTotal: stat.DiskWriteTotal,
-		})
-	}
-
-	labels := c.Labels
-	if labels == nil {
-		labels = make(map[string]string)
-	}
-
-	env := c.Env
-	if env == nil {
-		env = []string{}
-	}
-
-	mounts := make([]Mount, 0, len(c.Mounts))
-	for _, m := range c.Mounts {
-		mounts = append(mounts, Mount{
-			Type:        m.Type,
-			Source:      m.Source,
-			Destination: m.Destination,
-			RW:          m.Rw,
-		})
-	}
-
-	var mountStats map[string]MountStat
-	if len(c.MountStats) > 0 {
-		mountStats = make(map[string]MountStat, len(c.MountStats))
-		for _, ms := range c.MountStats {
-			mountStats[ms.Destination] = MountStat{
-				Destination: ms.Destination,
-				Total:       ms.Total,
-				Free:        ms.Free,
-				Used:        ms.Used,
-				Available:   ms.Available,
-				LastChecked: ms.LastChecked.AsTime(),
-			}
-		}
-	}
-
-	return Container{
-		ID:            c.Id,
-		Name:          c.Name,
-		Image:         c.Image,
-		Labels:        labels,
-		Group:         c.Group,
-		Created:       c.Created.AsTime(),
-		State:         c.State,
-		Health:        c.Health,
-		Host:          c.Host,
-		Tty:           c.Tty,
-		Command:       c.Command,
-		StartedAt:     c.Started.AsTime(),
-		FinishedAt:    c.Finished.AsTime(),
-		Stats:         utils.RingBufferFrom(300, stats),
-		MemoryLimit:   c.MemoryLimit,
-		CPULimit:      c.CpuLimit,
-		FullyLoaded:   c.FullyLoaded,
-		Env:           env,
-		Ports:         c.Ports,
-		Mounts:        mounts,
-		MountStats:    mountStats,
-		RestartPolicy: c.RestartPolicy,
-		NetworkMode:   c.NetworkMode,
-	}
-}
-
 // ContainerStat represent stats instant for a container
 type ContainerStat struct {
-	ID             string  `json:"id"`
+	ID             string  `json:"id,omitempty"`
 	CPUPercent     float64 `json:"cpu"`
 	MemoryPercent  float64 `json:"memory"`
 	MemoryUsage    float64 `json:"memoryUsage"`
@@ -212,6 +107,134 @@ type ContainerStat struct {
 	NetworkTxTotal uint64  `json:"networkTxTotal"`
 	DiskReadTotal  uint64  `json:"diskReadTotal"`
 	DiskWriteTotal uint64  `json:"diskWriteTotal"`
+}
+
+// MarshalJSON writes a stat without reflection. The first containers-changed event of a
+// stream carries up to 300 points for every container, so what a single point costs is
+// worth caring about: the id is empty on every buffered point (the store clears it before
+// pushing) and is dropped here, and percentages are written at two decimals, which is
+// finer than anything the UI renders.
+func (s ContainerStat) MarshalJSON() ([]byte, error) {
+	b := make([]byte, 0, 160)
+	b = append(b, '{')
+	if s.ID != "" {
+		id, err := json.Marshal(s.ID)
+		if err != nil {
+			return nil, err
+		}
+		b = append(b, `"id":`...)
+		b = append(b, id...)
+		b = append(b, ',')
+	}
+	b = append(b, `"cpu":`...)
+	b = appendFloat(b, s.CPUPercent, 2)
+	b = append(b, `,"memory":`...)
+	b = appendFloat(b, s.MemoryPercent, 2)
+	b = append(b, `,"memoryUsage":`...)
+	b = appendFloat(b, s.MemoryUsage, 0)
+	b = append(b, `,"networkRxTotal":`...)
+	b = strconv.AppendUint(b, s.NetworkRxTotal, 10)
+	b = append(b, `,"networkTxTotal":`...)
+	b = strconv.AppendUint(b, s.NetworkTxTotal, 10)
+	b = append(b, `,"diskReadTotal":`...)
+	b = strconv.AppendUint(b, s.DiskReadTotal, 10)
+	b = append(b, `,"diskWriteTotal":`...)
+	b = strconv.AppendUint(b, s.DiskWriteTotal, 10)
+	b = append(b, '}')
+	return b, nil
+}
+
+// appendFloat rounds to decimals and then writes the shortest form that round-trips, so a
+// rounded value never comes back as 0.29000000000000004 and a whole one stays "0". NaN and
+// Inf become 0, which the reflection encoder would have failed the whole event over.
+func appendFloat(b []byte, v float64, decimals int) []byte {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return append(b, '0')
+	}
+	if decimals > 0 {
+		pow := math.Pow(10, float64(decimals))
+		v = math.Round(v*pow) / pow
+	} else {
+		v = math.Round(v)
+	}
+	return strconv.AppendFloat(b, v, 'f', -1, 64)
+}
+
+// MarshalJSON swaps the stats history for its columnar form; every other field is
+// encoded as the struct tags say.
+func (c Container) MarshalJSON() ([]byte, error) {
+	type plain Container
+	var stats *statColumns
+	if c.Stats != nil {
+		stats = &statColumns{c.Stats.Data()}
+	}
+	return json.Marshal(struct {
+		plain
+		Stats *statColumns `json:"stats,omitempty"`
+	}{plain(c), stats})
+}
+
+// statColumns writes a stats history as one array per field instead of one object per
+// point. The first containers-changed event of a stream carries all 300 points for every
+// container, and as objects the keys and the cumulative byte counters were most of it:
+// counters run to ten digits and barely move between samples. Every point is still sent.
+// Integer series (memoryUsage and the four totals) are delta-encoded: the first value is
+// absolute and each one after it is the difference from the previous, so a reader sums
+// as it goes. A counter that resets (a restart) just gives a negative delta.
+type statColumns struct{ points []ContainerStat }
+
+func (s statColumns) MarshalJSON() ([]byte, error) {
+	data := s.points
+
+	b := make([]byte, 0, 32*len(data)+128)
+	b = append(b, `{"cpu":`...)
+	b = appendColumn(b, data, func(b []byte, _, cur ContainerStat) []byte { return appendFloat(b, cur.CPUPercent, 2) })
+	b = append(b, `,"memory":`...)
+	b = appendColumn(b, data, func(b []byte, _, cur ContainerStat) []byte { return appendFloat(b, cur.MemoryPercent, 2) })
+	b = append(b, `,"memoryUsage":`...)
+	b = appendColumn(b, data, func(b []byte, prev, cur ContainerStat) []byte {
+		return strconv.AppendInt(b, roundedInt(cur.MemoryUsage)-roundedInt(prev.MemoryUsage), 10)
+	})
+	b = append(b, `,"networkRxTotal":`...)
+	b = appendColumn(b, data, func(b []byte, prev, cur ContainerStat) []byte {
+		return strconv.AppendInt(b, int64(cur.NetworkRxTotal-prev.NetworkRxTotal), 10)
+	})
+	b = append(b, `,"networkTxTotal":`...)
+	b = appendColumn(b, data, func(b []byte, prev, cur ContainerStat) []byte {
+		return strconv.AppendInt(b, int64(cur.NetworkTxTotal-prev.NetworkTxTotal), 10)
+	})
+	b = append(b, `,"diskReadTotal":`...)
+	b = appendColumn(b, data, func(b []byte, prev, cur ContainerStat) []byte {
+		return strconv.AppendInt(b, int64(cur.DiskReadTotal-prev.DiskReadTotal), 10)
+	})
+	b = append(b, `,"diskWriteTotal":`...)
+	b = appendColumn(b, data, func(b []byte, prev, cur ContainerStat) []byte {
+		return strconv.AppendInt(b, int64(cur.DiskWriteTotal-prev.DiskWriteTotal), 10)
+	})
+	b = append(b, '}')
+	return b, nil
+}
+
+// appendColumn writes one field of every point as a JSON array. The first point is
+// paired with a zero stat, so a delta-encoded column starts with its absolute value.
+func appendColumn(b []byte, data []ContainerStat, write func(b []byte, prev, cur ContainerStat) []byte) []byte {
+	b = append(b, '[')
+	var prev ContainerStat
+	for i, cur := range data {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		b = write(b, prev, cur)
+		prev = cur
+	}
+	return append(b, ']')
+}
+
+func roundedInt(v float64) int64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return int64(math.Round(v))
 }
 
 // ContainerEvent represents events that are triggered
@@ -268,6 +291,9 @@ const (
 // LogFragment represents a single line within a grouped simple log
 type LogFragment struct {
 	Message string `json:"m"`
+	// TimestampPrefix is the length of a leading timestamp that repeats the
+	// line's Docker timestamp. See LogEvent.TimestampPrefix.
+	TimestampPrefix int `json:"tp,omitempty"`
 }
 
 type ContainerAction string
@@ -289,23 +315,134 @@ func ParseContainerAction(input string) (ContainerAction, error) {
 	}
 }
 
+// Statuses an update reports, in the order they can arrive. Every update ends
+// on exactly one of done, up-to-date, rolled-back or error.
+const (
+	UpdatePulling    = "pulling"
+	UpdateRecreating = "recreating"
+	// UpdateVerifying means the replacement started and is being watched to
+	// stay up (and healthy, if it has a healthcheck) before the old one goes.
+	UpdateVerifying = "verifying"
+	UpdateDone      = "done"
+	UpdateUpToDate  = "up-to-date"
+	// UpdateRolledBack means the replacement failed and the previous
+	// container was put back. Error says why the replacement failed.
+	UpdateRolledBack = "rolled-back"
+	UpdateError      = "error"
+)
+
 type UpdateProgress struct {
-	Status  string `json:"status"`  // "pulling", "recreating", "done", "error", "up-to-date"
+	Status  string `json:"status"`  // one of the Update* statuses above
 	Layer   string `json:"layer"`   // Docker layer ID (pull events only)
 	Current int64  `json:"current"` // Bytes downloaded
 	Total   int64  `json:"total"`   // Total bytes for layer
-	Error   string `json:"error"`   // Only when Status="error"
+	Error   string `json:"error"`   // Only when Status is "error" or "rolled-back"
+	// Result is set on the last progress of a swap that ran, whether it
+	// committed ("done") or was undone ("rolled-back"). It is what the update
+	// record needs, and never reaches the browser.
+	Result *UpdateResult `json:"-"`
+}
+
+// UpdateResult is what one swap changed, as the host that ran it saw it. An
+// agent sends it back with its last progress, so the server records updates on
+// agent hosts the same way as its own.
+type UpdateResult struct {
+	// OldID is the container that ran before, NewID the one running now: the
+	// replacement, or the old one put back when RolledBack.
+	OldID string
+	NewID string
+	// FromImageID and ToImageID are local image ids, FromDigest and ToDigest
+	// the same images as repo@sha256:... (empty for an image built locally).
+	FromImageID  string
+	ToImageID    string
+	FromDigest   string
+	ToDigest     string
+	OldStartedAt time.Time
+	// RolledBack means the new container did not stay up and the old one was
+	// put back.
+	RolledBack bool
+}
+
+// KeepLabel set to "true" keeps a stopped container out of every clean up, for
+// one that is stopped on purpose and started again later.
+const KeepLabel = "dev.dozzle.keep"
+
+// Labels an update leaves on the container it creates, and reads back on the
+// next one.
+const (
+	// PreviousImageLabel is the image id the container ran before its last
+	// update: the rollback target, and what cleanup removes on the update
+	// after.
+	PreviousImageLabel = "dev.dozzle.previous-image"
+	// PreviousRefLabel is that image as repo@sha256:digest, so it can be
+	// pulled again by digest once it is gone locally. Absent for an image
+	// built locally, which has no registry digest.
+	PreviousRefLabel = "dev.dozzle.previous-ref"
+	// RolledBackFromLabel is the image a rollback moved the container away
+	// from, as repo@sha256:digest (or the image id for an image built
+	// locally). The auto-update schedule leaves the container alone while its
+	// registry still offers that image, and the next update clears it.
+	RolledBackFromLabel = "dev.dozzle.rolled-back-from"
+)
+
+// RollbackOptions are what one rollback checks before it runs.
+type RollbackOptions struct {
+	// ExpectedFromDigest refuses the rollback unless the container still runs
+	// this digest (repo@sha256:... or sha256:...), so a stale request cannot
+	// roll back a container that has moved on since.
+	ExpectedFromDigest string
+}
+
+var (
+	// ErrNotRunning refuses an update or rollback of a container that is not
+	// running. A stopped container may be stopped on purpose, and only someone
+	// starting it decides it should run again. The text is what people read,
+	// in the UI and in Dozzle Cloud; assets/composable/containers/
+	// containerActions.ts matches it to show it translated.
+	ErrNotRunning = errors.New("start the container first")
+	// ErrCheckOnly refuses an update of a container labelled
+	// dev.dozzle.update=check: it is updated outside Dozzle. The UI never
+	// offers one, so the text is not translated.
+	ErrCheckOnly = errors.New("labelled dev.dozzle.update=check, update it outside Dozzle")
+	// ErrRollbackUnsupported is returned where a rollback cannot run: a swarm
+	// service, Kubernetes, Dozzle's own container.
+	ErrRollbackUnsupported = errors.New("rollback is not supported")
+	// ErrNoRollbackTarget means the container has no previous image Dozzle
+	// knows of, or that image is gone from the host.
+	ErrNoRollbackTarget = errors.New("no previous image to roll back to")
+	// ErrDigestMismatch means the container no longer runs the digest the
+	// rollback expected.
+	ErrDigestMismatch = errors.New("container no longer runs the expected image")
+)
+
+// DigestOf is the sha256:... part of a repo@sha256:... reference, or ref
+// itself when it is already a bare digest.
+func DigestOf(ref string) string {
+	if _, digest, found := strings.Cut(ref, "@"); found {
+		return digest
+	}
+	return ref
+}
+
+// SameImageID compares image ids with or without their sha256: prefix.
+func SameImageID(a, b string) bool {
+	a, b = strings.TrimPrefix(a, "sha256:"), strings.TrimPrefix(b, "sha256:")
+	return a != "" && a == b
 }
 
 type LogEvent struct {
 	Type        LogType `json:"t,omitempty"`
-	Message     any     `json:"m,omitempty"`
+	Message     any     `json:"m,omitempty" tstype:"string | LogFragment[] | JSONObject"`
 	RawMessage  string  `json:"rm,omitempty"`
 	Timestamp   int64   `json:"ts"`
 	Id          uint32  `json:"id,omitempty"`
-	Level       string  `json:"l,omitempty"`
-	Stream      string  `json:"s,omitempty"`
+	Level       string  `json:"l,omitempty" tstype:"Level"`
+	Stream      string  `json:"s,omitempty" tstype:"'stdout' | 'stderr' | 'unknown'"`
 	ContainerID string  `json:"c,omitempty"`
+	// TimestampPrefix is the byte length of a timestamp the app printed at the
+	// start of a single line when it agrees with Timestamp, so the UI can hide
+	// the duplicate. Message itself is left intact for search, alerts and copy.
+	TimestampPrefix int `json:"tp,omitempty"`
 }
 
 func (l *LogEvent) HasLevel() bool {
@@ -316,13 +453,43 @@ func (l *LogEvent) IsSimple() bool {
 	return l.Type == LogTypeSingle || l.Type == LogTypeGroup
 }
 
-// maxGroupTimeDelta is the maximum time difference (in milliseconds) between
+// MaxGroupTimeDelta is the maximum time difference (in milliseconds) between
 // consecutive log lines that can be grouped together. Docker can introduce
 // up to ~30ms of jitter between related log lines (e.g., a stack trace).
-const maxGroupTimeDelta = 50
+const MaxGroupTimeDelta = 50
+
+// MaxLogLineBytes bounds one log line, and one grouped entry, anywhere in the
+// pipeline. Docker hands a long line over in ~16KB frames and nothing upstream
+// limits how many, so a container that writes a single enormous line would
+// otherwise be held in memory whole and shipped whole to every consumer. It
+// matches the largest line Dozzle Cloud keeps, so clipping here loses nothing
+// that would have survived ingest.
+const MaxLogLineBytes = 1024 * 1024
+
+// LogTruncationSuffix marks a line clipped to MaxLogLineBytes, so it reads as
+// clipped rather than as a log that stops mid-word.
+const LogTruncationSuffix = "… [truncated]"
+
+// TruncateLogLine clips s to MaxLogLineBytes without splitting a rune, keeping
+// a trailing newline so readers that frame on it still see a line end.
+func TruncateLogLine(s string) string {
+	if len(s) <= MaxLogLineBytes {
+		return s
+	}
+	newline := strings.HasSuffix(s, "\n")
+	n := MaxLogLineBytes
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	s = s[:n] + LogTruncationSuffix
+	if newline {
+		s += "\n"
+	}
+	return s
+}
 
 func (l *LogEvent) IsCloseToTime(other *LogEvent) bool {
-	return math.Abs(float64(l.Timestamp-other.Timestamp)) < maxGroupTimeDelta
+	return math.Abs(float64(l.Timestamp-other.Timestamp)) < MaxGroupTimeDelta
 }
 
 func (l *LogEvent) MessageId() int64 {

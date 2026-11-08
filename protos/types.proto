@@ -5,7 +5,7 @@ package protobuf;
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 
-option go_package = "internal/agent/pb";
+option go_package = "internal/container/agent/pb";
 
 message Container {
   string id = 1;
@@ -37,6 +37,25 @@ message Container {
   string networkMode = 24;
   repeated MountStat mountStats = 25;
   repeated Mount mounts = 26;
+  int32 restartCount = 27;
+  bool oomKilled = 28;
+  int32 exitCode = 29;
+  // unset until the agent has measured the writable layer
+  optional int64 sizeRw = 30;
+  repeated VolumeUsage volumes = 31;
+  repeated ContainerNetwork networks = 32;
+}
+
+message ContainerNetwork {
+  string name = 1;
+  string ip = 2;
+}
+
+message VolumeUsage {
+  string name = 1;
+  string destination = 2;
+  int64 size = 3;
+  int64 links = 4;
 }
 
 message ContainerStat {
@@ -55,6 +74,8 @@ message Mount {
   string source = 2;
   string destination = 3;
   bool rw = 4;
+  // the volume's name; empty for a bind mount
+  string name = 5;
 }
 
 message MountStat {
@@ -68,6 +89,7 @@ message MountStat {
 
 message LogFragment {
   string message = 1;
+  int32 timestampPrefix = 2;
 }
 
 message LogEvent {
@@ -79,6 +101,7 @@ message LogEvent {
   string stream = 6;
   string type = 7; // "single", "group", or "complex"
   string rawMessage = 8;
+  int32 timestampPrefix = 9;
 }
 
 message SingleMessage {
@@ -116,6 +139,34 @@ message Host {
   string agentVersion = 11;
   string dockerVersion = 12;
   string runtime = 13;
+  // Host-level metrics, read by the agent off its own machine. An older agent
+  // leaves them unset, which reads as "no metrics" rather than zero load.
+  bool metricsAvailable = 14;
+  double load1 = 15;
+  double load5 = 16;
+  double load15 = 17;
+  uint64 uptime = 18;
+  uint64 diskTotal = 19;
+  uint64 diskFree = 20;
+  repeated Disk disks = 21;
+  // unset until the agent has measured it, or when its engine cannot
+  Reclaimable reclaimable = 22;
+}
+
+message Reclaimable {
+  int64 images = 1;
+  int64 imagesSize = 2;
+  int64 volumes = 3;
+  int64 volumesSize = 4;
+  int64 containers = 5;
+  int64 containersSize = 6;
+  int64 buildCacheSize = 7;
+}
+
+message Disk {
+  string name = 1;
+  uint64 total = 2;
+  uint64 free = 3;
 }
 
 enum ContainerAction {
@@ -136,6 +187,7 @@ message NotificationSubscription {
   int32 cooldown = 8;
   int32 sampleWindow = 9;
   string eventExpression = 10;
+  bool immediate = 11;
 }
 
 message NotificationDispatcher {
@@ -153,6 +205,11 @@ message NotificationCloudConfig {
   string apiKey = 1;
   string prefix = 2;
   google.protobuf.Timestamp expiresAt = 3;
+  // Whether the fleet streams container logs to Dozzle Cloud. Optional so an
+  // agent can tell "the hub did not say" (an older hub — keep the historical
+  // default of enabled) from "the hub said no". Without this an agent never
+  // learned the setting at all and streamed regardless of what the user chose.
+  optional bool streamLogs = 4;
 }
 
 message NotificationSubscriptionStats {

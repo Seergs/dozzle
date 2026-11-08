@@ -1,5 +1,6 @@
 ---
 title: Filter
+description: Limit which Docker containers Dozzle can see with DOZZLE_FILTER or --filter, and learn how UI, agent and user filters combine.
 ---
 
 # Filtering Containers
@@ -31,7 +32,9 @@ services:
 
 Common filters are `name` or `label` to limit Dozzle's access to containers.
 
-## UI, Agents, and User Filters <Badge type="tip" text="New" />
+To match any of several values, repeat the same label: `--filter label=team=a --filter label=team=b` shows containers on either team (`--filter team=a --filter team=b` on Kubernetes). Filters on different labels must all match.
+
+## UI, Agents, and User Filters
 
 Dozzle supports multiple filters to limit the containers it can see. Filters can be set at the UI, agent, or user level.
 
@@ -39,7 +42,7 @@ Dozzle supports multiple filters to limit the containers it can see. Filters can
 2. **Agent Filters**: These filters are set at the agent level and sent to Docker to limit the containers exposed by that agent. Agent filters and UI filters work together to restrict the containers.
 3. **User Filters**: These filters are set at the user level and determine which containers the user can see. If user filters are not defined, Dozzle defaults to using the UI filters.
 
-For more information on setting filters for specific users, see [user filters](/guide/authentication#setting-specific-filters-for-users). For details on setting filters for agents, see [agent filters](/guide/agent#setting-up-filters).
+For more information on setting filters for specific users, see [user filters](/guide/authentication/simple#setting-specific-filters-for-users). For details on setting filters for agents, see [agent filters](/guide/agent#setting-up-filters).
 
 > [!WARNING]
 > It is important to understand that multiple filters are combined to limit the containers. For example, if you set `--filter label=color` at the UI level and `--filter label=type` at the agent level, Dozzle will only display containers that have both the `color` and `type` labels.

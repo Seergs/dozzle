@@ -1,0 +1,217 @@
+package cli
+
+import (
+	"bytes"
+	"testing"
+
+	"github.com/amir20/dozzle/internal/config"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/stretchr/testify/assert"
+)
+
+func lookupFrom(pairs map[string]string) func(string) (string, bool) {
+	return func(key string) (string, bool) {
+		v, ok := pairs[key]
+		return v, ok
+	}
+}
+
+func TestApplyConfigFile(t *testing.T) {
+	fullFile := config.File{
+		AuthProvider:  new("simple"),
+		EnableActions: new(true),
+		EnableShell:   new(true),
+	}
+
+	tests := []struct {
+		name       string
+		start      Args
+		file       config.File
+		argv       []string
+		env        map[string]string
+		wantAuth   string
+		wantAct    bool
+		wantShell  bool
+		wantLocked Locked
+	}{
+		{
+			name:     "empty file keeps defaults",
+			start:    Args{AuthProvider: "none"},
+			wantAuth: "none",
+		},
+		{
+			name:      "file applies when nothing set",
+			start:     Args{AuthProvider: "none"},
+			file:      fullFile,
+			wantAuth:  "simple",
+			wantAct:   true,
+			wantShell: true,
+		},
+		{
+			name:       "flag locks auth provider",
+			start:      Args{AuthProvider: "forward-proxy"},
+			file:       fullFile,
+			argv:       []string{"--auth-provider", "forward-proxy"},
+			wantAuth:   "forward-proxy",
+			wantAct:    true,
+			wantShell:  true,
+			wantLocked: Locked{AuthProvider: true},
+		},
+		{
+			name:       "flag=value form locks",
+			start:      Args{AuthProvider: "oidc"},
+			file:       fullFile,
+			argv:       []string{"--auth-provider=oidc", "--enable-actions=false"},
+			wantAuth:   "oidc",
+			wantShell:  true,
+			wantLocked: Locked{AuthProvider: true, EnableActions: true},
+		},
+		{
+			name:       "bare bool flag locks",
+			start:      Args{AuthProvider: "none", EnableShell: true},
+			file:       config.File{EnableShell: new(false)},
+			argv:       []string{"--enable-shell"},
+			wantAuth:   "none",
+			wantShell:  true,
+			wantLocked: Locked{EnableShell: true},
+		},
+		{
+			name:       "env locks even when false or empty",
+			start:      Args{AuthProvider: "none"},
+			file:       fullFile,
+			env:        map[string]string{"DOZZLE_ENABLE_ACTIONS": "false", "DOZZLE_ENABLE_SHELL": ""},
+			wantAuth:   "simple",
+			wantLocked: Locked{EnableActions: true, EnableShell: true},
+		},
+		{
+			name:     "similar flag name and args after terminator do not lock",
+			start:    Args{AuthProvider: "none"},
+			file:     config.File{EnableActions: new(true)},
+			argv:     []string{"--enable-actions-extra", "--", "--enable-actions"},
+			wantAuth: "none",
+			wantAct:  true,
+		},
+		{
+			name:       "single and triple dash forms lock",
+			start:      Args{AuthProvider: "none"},
+			file:       fullFile,
+			argv:       []string{"-auth-provider", "none", "-enable-actions=false", "---enable-shell"},
+			wantAuth:   "none",
+			wantShell:  false,
+			wantLocked: Locked{AuthProvider: true, EnableActions: true, EnableShell: true},
+		},
+		{
+			name:     "file false is applied",
+			start:    Args{AuthProvider: "none", EnableActions: true},
+			file:     config.File{EnableActions: new(false)},
+			wantAuth: "none",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := tt.start
+			applyConfigFile(&args, tt.file, tt.argv, lookupFrom(tt.env))
+			assert.Equal(t, tt.wantAuth, args.AuthProvider)
+			assert.Equal(t, tt.wantAct, args.EnableActions)
+			assert.Equal(t, tt.wantShell, args.EnableShell)
+			assert.Equal(t, tt.wantLocked, args.Locked)
+		})
+	}
+}
+
+func TestApplyConfigFileAutoUpdate(t *testing.T) {
+	file := config.File{AutoUpdate: new("weekly"), AutoUpdateTime: new("04:30")}
+
+	args := Args{}
+	applyConfigFile(&args, file, nil, lookupFrom(nil))
+	assert.Equal(t, "weekly", args.AutoUpdate)
+	assert.Equal(t, "04:30", args.AutoUpdateTime)
+	assert.Equal(t, Locked{}, args.Locked)
+
+	args = Args{AutoUpdate: "daily"}
+	applyConfigFile(&args, file, []string{"--auto-update=daily"}, lookupFrom(nil))
+	assert.Equal(t, "daily", args.AutoUpdate)
+	assert.Equal(t, "04:30", args.AutoUpdateTime)
+	assert.Equal(t, Locked{AutoUpdate: true}, args.Locked)
+
+	args = Args{AutoUpdateTime: "01:00"}
+	applyConfigFile(&args, file, nil, lookupFrom(map[string]string{"DOZZLE_AUTO_UPDATE_TIME": "01:00"}))
+	assert.Equal(t, "weekly", args.AutoUpdate)
+	assert.Equal(t, "01:00", args.AutoUpdateTime)
+	assert.Equal(t, Locked{AutoUpdateTime: true}, args.Locked)
+
+	file = config.File{UpdateContainers: new("off")}
+	args = Args{}
+	applyConfigFile(&args, file, nil, lookupFrom(nil))
+	assert.Equal(t, "off", args.UpdateContainers)
+	assert.Equal(t, Locked{}, args.Locked)
+
+	args = Args{UpdateContainers: "all"}
+	applyConfigFile(&args, file, nil, lookupFrom(map[string]string{"DOZZLE_UPDATE_CONTAINERS": "all"}))
+	assert.Equal(t, "all", args.UpdateContainers)
+	assert.Equal(t, Locked{UpdateContainers: true}, args.Locked)
+}
+
+func TestApplyConfigFileAutoCleanup(t *testing.T) {
+	file := config.File{AutoPrune: new("weekly"), AutoPruneTime: new("04:30")}
+	args := Args{AutoCleanup: "daily"}
+	applyConfigFile(&args, file, nil, lookupFrom(map[string]string{"DOZZLE_AUTO_CLEANUP": "daily"}))
+	assert.Equal(t, "daily", args.AutoCleanup)
+	assert.Equal(t, "04:30", args.AutoCleanupTime)
+	assert.Equal(t, Locked{AutoCleanup: true}, args.Locked)
+}
+
+func TestValidateAutoUpdate(t *testing.T) {
+	assert.NoError(t, validateAutoUpdate(Args{}))
+	assert.NoError(t, validateAutoUpdate(Args{AutoUpdate: "bogus", AutoUpdateTime: "25:00"}), "file values are not fatal")
+	assert.NoError(t, validateAutoUpdate(Args{AutoUpdate: "weekly", AutoUpdateTime: "23:59", Locked: Locked{AutoUpdate: true, AutoUpdateTime: true}}))
+	assert.Error(t, validateAutoUpdate(Args{AutoUpdate: "hourly", Locked: Locked{AutoUpdate: true}}))
+	assert.Error(t, validateAutoUpdate(Args{AutoUpdateTime: "3:00", Locked: Locked{AutoUpdateTime: true}}))
+	assert.NoError(t, validateAutoUpdate(Args{UpdateContainers: "everything"}), "file values are not fatal")
+	assert.NoError(t, validateAutoUpdate(Args{UpdateContainers: "all", Locked: Locked{UpdateContainers: true}}))
+	assert.Error(t, validateAutoUpdate(Args{UpdateContainers: "everything", Locked: Locked{UpdateContainers: true}}))
+	assert.Error(t, validateAutoUpdate(Args{AutoCleanup: "hourly", Locked: Locked{AutoCleanup: true}}))
+	assert.Error(t, validateAutoUpdate(Args{AutoCleanupTime: "4:00", Locked: Locked{AutoCleanupTime: true}}))
+	assert.NoError(t, validateAutoUpdate(Args{AutoCleanup: "hourly"}), "file values are not fatal")
+}
+
+func TestApplyConfigFileRemoteAgents(t *testing.T) {
+	file := config.File{
+		RemoteAgents:  []string{"nas:7007|nas", " pi:7007 ", "env:7007|renamed", "nas:7007", ""},
+		PrivateAgents: []string{"pi:7007", "env:7007", "gone:7007"},
+	}
+
+	args := Args{RemoteAgent: []string{"env:7007"}}
+	applyConfigFile(&args, file, nil, lookupFrom(nil))
+
+	assert.Equal(t, []string{"nas:7007|nas", "pi:7007"}, args.FileAgents)
+	assert.Equal(t, []string{"env:7007", "nas:7007|nas", "pi:7007"}, args.RemoteAgent)
+	assert.Equal(t, []string{"env:7007"}, args.EnvAgents)
+	// Only agents the file owns can be private; the operator's keep their pair.
+	assert.Equal(t, []string{"pi:7007"}, args.PrivateAgents)
+
+	args = Args{}
+	applyConfigFile(&args, config.File{}, nil, lookupFrom(nil))
+	assert.Empty(t, args.FileAgents)
+	assert.Empty(t, args.RemoteAgent)
+}
+
+// The PEM vars are read with os.LookupEnv, not go-arg, so they would otherwise
+// be reported as typos on every agent that uses a private certificate.
+func TestValidateEnvVarsKnowsCertPEM(t *testing.T) {
+	t.Setenv("DOZZLE_CERT_PEM", "x")
+	t.Setenv("DOZZLE_KEY_PEM", "x")
+	t.Setenv("DOZZLE_NOT_A_THING", "x")
+
+	var buf bytes.Buffer
+	old := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = old })
+
+	ValidateEnvVars(Args{})
+	assert.NotContains(t, buf.String(), "DOZZLE_CERT_PEM")
+	assert.NotContains(t, buf.String(), "DOZZLE_KEY_PEM")
+	assert.Contains(t, buf.String(), "DOZZLE_NOT_A_THING")
+}

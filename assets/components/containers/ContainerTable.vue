@@ -1,0 +1,551 @@
+<template>
+  <div class="rounded-box border-base-content/10 bg-base-100 overflow-hidden border">
+    <div
+      class="border-base-content/10 flex flex-row items-center gap-3 border-b px-3 py-2"
+      v-if="Object.keys(hosts).length > 1 || isMobile"
+    >
+      <div v-if="Object.keys(hosts).length > 1" class="min-w-0 flex-1">
+        <div role="tablist" class="tabs tabs-box tabs-xs" v-if="Object.keys(hosts).length < 4">
+          <input
+            type="radio"
+            name="host"
+            role="tab"
+            class="tab"
+            aria-label="Show All"
+            v-model="selectedHost"
+            :value="null"
+          />
+          <input
+            type="radio"
+            name="host"
+            role="tab"
+            class="tab"
+            :aria-label="host.name"
+            v-for="host in hosts"
+            :value="host.id"
+            :key="host.id"
+            v-model="selectedHost"
+          />
+        </div>
+
+        <DropdownMenu
+          class="btn-xs md:btn-sm"
+          v-model="selectedHost"
+          :options="[
+            { label: 'Show All', value: null },
+            ...Object.values(hosts).map((host) => ({ label: host.name, value: host.id })),
+          ]"
+          v-else
+        />
+      </div>
+      <div class="text-base-content/50 flex flex-1 items-center justify-end gap-2 text-xs">
+        <div class="flex items-center gap-1 md:hidden">
+          {{ $t("label.sort-by") }}
+          <DropdownMenu class="btn-xs" plain v-model="mobileSortField" :options="sortOptions" />
+          <button
+            class="btn btn-square btn-ghost btn-xs"
+            @click="direction *= -1"
+            :aria-label="$t('label.sort-direction')"
+          >
+            <mdi:arrow-up :class="direction > 0 ? '' : 'rotate-180'" />
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="table-md table">
+        <thead class="max-md:hidden">
+          <tr :data-direction="direction > 0 ? 'asc' : 'desc'">
+            <th
+              v-for="(value, key) in fields"
+              :key="key"
+              @click.prevent="sort(key)"
+              :class="[value.customClass, { 'selected-sort': key === sortField }]"
+              v-show="isVisible(key)"
+            >
+              <a class="inline-flex cursor-pointer gap-1.5 text-xs font-medium tracking-wide uppercase">
+                <span>{{ $t(headerLabel(value)) }}</span>
+                <span class="h-4" data-icon>
+                  <mdi:arrow-up />
+                </span>
+              </a>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-if="!ready">
+            <tr v-for="i in skeletonRows" :key="`skeleton-${i}`" role="status" class="animate-pulse">
+              <td v-if="isVisible('name')" class="max-w-80 max-md:w-full max-md:max-w-0">
+                <div class="flex items-center gap-2">
+                  <div class="bg-base-content/50 size-6 shrink-0 rounded-full opacity-50"></div>
+                  <div class="bg-base-content/50 h-3 w-40 max-w-full rounded-full opacity-50"></div>
+                  <span class="sr-only">Loading...</span>
+                </div>
+              </td>
+              <td v-if="isVisible('host')">
+                <div class="bg-base-content/50 h-3 w-20 rounded-full opacity-50"></div>
+              </td>
+              <td v-if="isVisible('created')">
+                <div class="bg-base-content/50 h-3 w-24 rounded-full opacity-50"></div>
+              </td>
+              <td v-if="isVisible('uptime')">
+                <div class="bg-base-content/50 h-3 w-24 rounded-full opacity-50"></div>
+              </td>
+              <td v-if="isVisible('cpu')">
+                <div class="bg-base-content/50 h-3 w-full rounded-full opacity-50"></div>
+              </td>
+              <td v-if="isVisible('mem')">
+                <div class="bg-base-content/50 h-3 w-full rounded-full opacity-50"></div>
+              </td>
+              <td v-if="isVisible('net')" class="max-xl:hidden">
+                <div class="bg-base-content/50 h-3 w-16 rounded-full opacity-50"></div>
+              </td>
+              <td v-if="isVisible('diskio')" class="max-xl:hidden">
+                <div class="bg-base-content/50 h-3 w-16 rounded-full opacity-50"></div>
+              </td>
+              <td v-if="isVisible('disk')" class="max-xl:hidden">
+                <div class="bg-base-content/50 h-3 w-12 rounded-full opacity-50"></div>
+              </td>
+            </tr>
+          </template>
+          <tr
+            v-else
+            v-for="container in paginated"
+            :key="container.id"
+            v-memo="[
+              container.id,
+              container.name,
+              container.customGroup,
+              container.hostLabel,
+              container.state,
+              container.health,
+              container.sizeRw,
+              container.volumes,
+              statMode,
+              average,
+              hiddenColumns,
+              isMobile,
+              multiHost,
+              showAppIcons,
+              dismissedLinkHint,
+              showUpdates && hasUpdate(container),
+            ]"
+            class="hover:bg-base-200/60"
+          >
+            <td v-if="isVisible('name')" class="max-w-80 max-md:w-full max-md:max-w-0">
+              <div class="flex items-center gap-2 max-md:items-start">
+                <ContainerIcon
+                  :state="container.state"
+                  :health="container.health"
+                  :slug="container.icon"
+                  class="size-6"
+                />
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2 max-md:h-6">
+                    <router-link
+                      class="min-w-0 flex-1 truncate font-medium max-md:text-base"
+                      :to="{ name: '/container/[id]', params: { id: container.id } }"
+                      :title="container.name"
+                    >
+                      {{ container.name }}
+                    </router-link>
+                    <AlertDot :container-id="container.id" />
+                    <ContainerUpdateDot v-if="showUpdates" :container="container" />
+                    <ContainerLink :container="container" />
+                    <ContainerLinkHint v-if="!isMobile" :container="container" />
+                    <RelativeTime
+                      v-if="isMobile"
+                      :date="container.created"
+                      narrow
+                      class="text-base-content/50 shrink-0 text-xs"
+                    />
+                  </div>
+                  <!-- The image rides on the muted line under the name rather than in a
+                       column of its own: the table has no width to spare. Phones keep
+                       just the group, the row there is already full. -->
+                  <div
+                    v-if="isMobile ? container.customGroup : container.customGroup || container.image"
+                    class="text-base-content/50 truncate text-xs"
+                  >
+                    <span>{{ container.customGroup }}</span
+                    ><template v-if="!isMobile && container.image"
+                      ><span v-if="container.customGroup" class="text-base-content/30 mx-1">·</span
+                      ><span class="font-mono" :title="container.image">{{ shortImageRef(container.image) }}</span
+                      ><span
+                        v-if="container.imageVersion"
+                        class="text-base-content/35 ml-1 font-mono"
+                        :title="
+                          $t('toolbar.image-version', {
+                            image: shortImageRef(container.image),
+                            version: container.imageVersion,
+                          })
+                        "
+                        >({{ container.imageVersion }})</span
+                      ></template
+                    >
+                  </div>
+                  <!-- The host card's meter strip at row size: two halves spanning the
+                       row, so the bars are long enough to read at a glance. -->
+                  <div
+                    v-if="isMobile && container.state === 'running'"
+                    class="bg-base-content/5.5 divide-base-content/10 mt-1.5 grid grid-cols-2 divide-x rounded-lg"
+                  >
+                    <ContainerStatCell
+                      :container="container"
+                      type="cpu"
+                      :host="hosts[container.host]"
+                      :mode="statMode"
+                    />
+                    <ContainerStatCell
+                      :container="container"
+                      type="mem"
+                      :host="hosts[container.host]"
+                      :mode="statMode"
+                    />
+                  </div>
+                </div>
+              </div>
+            </td>
+            <td v-if="isVisible('host')" class="text-base-content/70">{{ container.hostLabel }}</td>
+            <td v-if="isVisible('created')" class="text-base-content/70">
+              <RelativeTime :date="container.created" />
+            </td>
+            <td v-if="isVisible('uptime')" class="text-base-content/70">
+              <ContainerUptime :container="container" />
+            </td>
+            <td v-if="isVisible('cpu')">
+              <ContainerStatCell
+                :container="container"
+                type="cpu"
+                :host="hosts[container.host]"
+                :mode="statMode"
+                :average="average"
+              />
+            </td>
+            <td v-if="isVisible('mem')">
+              <ContainerStatCell
+                :container="container"
+                type="mem"
+                :host="hosts[container.host]"
+                :mode="statMode"
+                :average="average"
+              />
+            </td>
+            <td v-if="isVisible('net')" class="max-xl:hidden">
+              <ContainerRateCell :container="container" type="net" :average="average" />
+            </td>
+            <td v-if="isVisible('diskio')" class="max-xl:hidden">
+              <ContainerRateCell :container="container" type="disk" :average="average" />
+            </td>
+            <td
+              v-if="isVisible('disk')"
+              class="text-base-content/70 font-mono whitespace-nowrap max-xl:hidden"
+              :title="diskBreakdown(container)"
+            >
+              <template v-if="container.diskTotal !== undefined">{{
+                formatBytes(container.diskTotal, { decimals: 1 })
+              }}</template>
+              <span v-else class="text-base-content/40">&ndash;</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div
+      class="border-base-content/10 flex flex-row flex-wrap items-center gap-3 border-t px-3 py-2"
+      v-if="ready && (isPaginated || containers.length > pageSizes[0])"
+    >
+      <div class="text-base-content/50 flex items-center gap-1 text-xs" v-show="containers.length > pageSizes[0]">
+        {{ $t("label.per-page") }}
+
+        <DropdownMenu
+          class="btn-xs"
+          v-model="perPage"
+          :options="pageSizes.map((i) => ({ label: i.toLocaleString(), value: i }))"
+        />
+      </div>
+      <nav class="join ml-auto" v-if="isPaginated && totalPages <= 15">
+        <input
+          class="btn btn-square btn-sm join-item"
+          type="radio"
+          v-model="currentPage"
+          :aria-label="`${i}`"
+          :value="i"
+          v-for="i in totalPages"
+        />
+      </nav>
+      <DropdownMenu
+        v-else-if="isPaginated"
+        class="btn-xs ml-auto"
+        v-model="currentPage"
+        :options="Array.from({ length: totalPages }, (_, i) => ({ label: `${i + 1}`, value: i + 1 }))"
+      />
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { Container, diskRate, networkRate, uptime } from "@/models/Container";
+import { showAppIcons } from "@/stores/settings";
+import { toRefs } from "@vueuse/core";
+
+const { t } = useI18n();
+const { hosts } = useHosts();
+const multiHost = computed(() => Object.keys(hosts.value).length > 1);
+// k8s reads network and disk from the kubelets, which only answer once RBAC grants
+// nodes/stats. Both come from the same read, so a measured layer stands for both.
+const hasKubeletStats = computed(() => config.mode !== "k8s" || containers.some((c) => c.sizeRw !== undefined));
+const selectedHost = ref(null);
+// Same gate as the dashboard's updates button: without actions there is
+// nothing a mark on the row could lead to.
+const showUpdates = updatesVisible();
+const { hasUpdate } = useImageUpdates();
+
+const fields: Record<
+  string,
+  {
+    label: string;
+    mobileLabel?: string;
+    // the header without "Avg.", for when the moving average is switched off
+    rawLabel?: string;
+    sortFunc: (a: Container, b: Container) => number;
+    mobileVisible: boolean;
+    customClass?: string;
+    // sortable from the dropdown, but no column: the icon's dot already shows it
+    sortOnly?: boolean;
+  }
+> = {
+  name: {
+    label: "label.container-name",
+    mobileLabel: "label.name",
+    sortFunc: (a: Container, b: Container) =>
+      (a.name.localeCompare(b.name) || (a.customGroup ?? "").localeCompare(b.customGroup ?? "")) * direction.value,
+    mobileVisible: true,
+  },
+  host: {
+    label: "label.host",
+    sortFunc: (a: Container, b: Container) => a.hostLabel.localeCompare(b.hostLabel) * direction.value,
+    mobileVisible: false,
+    customClass: "w-1",
+  },
+  state: {
+    label: "label.status",
+    sortFunc: (a: Container, b: Container) =>
+      (a.health ?? a.state).localeCompare(b.health ?? b.state) * direction.value,
+    mobileVisible: false,
+    sortOnly: true,
+  },
+  created: {
+    label: "label.created",
+    sortFunc: (a: Container, b: Container) => (a.created.getTime() - b.created.getTime()) * direction.value,
+    mobileVisible: false,
+    customClass: "w-1",
+  },
+  uptime: {
+    label: "label.uptime",
+    sortFunc: (a: Container, b: Container) => (uptimeOrder(a) - uptimeOrder(b)) * direction.value,
+    mobileVisible: false,
+    customClass: "w-1",
+  },
+  cpu: {
+    label: "label.avg-cpu",
+    mobileLabel: "label.cpu",
+    rawLabel: "label.cpu",
+    sortFunc: (a: Container, b: Container) => (cpuOf(a) - cpuOf(b)) * direction.value,
+    mobileVisible: false,
+    customClass: "min-w-48 max-md:min-w-0",
+  },
+  mem: {
+    label: "label.avg-mem",
+    mobileLabel: "label.mem",
+    rawLabel: "label.mem",
+    sortFunc: (a: Container, b: Container) => (memOf(a) - memOf(b)) * direction.value,
+    mobileVisible: false,
+    customClass: "min-w-48 max-md:min-w-0",
+  },
+  net: {
+    label: "label.network",
+    sortFunc: (a: Container, b: Container) => (netTotal(a) - netTotal(b)) * direction.value,
+    mobileVisible: false,
+    customClass: "w-1 max-xl:hidden",
+  },
+  diskio: {
+    label: "label.disk-io",
+    sortFunc: (a: Container, b: Container) => (diskIoTotal(a) - diskIoTotal(b)) * direction.value,
+    mobileVisible: false,
+    customClass: "w-1 max-xl:hidden",
+  },
+  disk: {
+    label: "label.disk",
+    // not measured yet sorts below an empty layer
+    sortFunc: (a: Container, b: Container) => ((a.diskTotal ?? -1) - (b.diskTotal ?? -1)) * direction.value,
+    mobileVisible: false,
+    customClass: "w-1 max-xl:hidden",
+  },
+};
+
+// stopped or not yet measured sorts below an idle container
+const netTotal = (container: Container) => {
+  const rate = networkRate(container, average.value);
+  return rate ? rate.rx + rate.tx : -1;
+};
+const diskIoTotal = (container: Container) => {
+  const rate = diskRate(container, average.value);
+  return rate ? rate.read + rate.write : -1;
+};
+const cpuOf = (container: Container) => (average.value ? container.movingAverage : container.stat).cpu;
+const memOf = (container: Container) => (average.value ? container.movingAverage : container.stat).memoryUsage;
+// Longest up first when descending; anything not up sorts below every running container.
+const uptimeOrder = (container: Container) => {
+  const status = uptime(container);
+  return status?.state === "up" || status?.state === "paused" ? Date.now() - status.since.getTime() : -1;
+};
+
+const { containers } = defineProps<{
+  containers: Container[];
+}>();
+
+const statMode = defineModel<"chart" | "progress">("statMode", { default: "chart" });
+const hiddenColumns = defineModel<string[]>("hiddenColumns", { default: () => [] });
+const average = defineModel<boolean>("average", { default: true });
+
+const { ready } = storeToRefs(useContainerStore());
+type keys = keyof typeof fields;
+
+const perPage = useStorage("DOZZLE_TABLE_PAGE_SIZE", 15);
+const pageSizes = [15, 30, 50, 100];
+
+const storage = useStorage<{ column: keys; direction: 1 | -1 }>("DOZZLE_TABLE_CONTAINERS_SORT", {
+  column: "created" as keys,
+  direction: -1 as 1 | -1,
+});
+const { column: sortField, direction } = toRefs(storage.value);
+const counter = useInterval(10000);
+const filteredContainers = computed(() =>
+  containers.filter((c) => selectedHost.value === null || c.host === selectedHost.value),
+);
+const sortedContainers = computedWithControl(
+  () => [filteredContainers.value.length, sortField.value, direction.value, average.value, counter.value],
+  () => filteredContainers.value.sort((a, b) => fields[sortField.value].sortFunc(a, b)),
+);
+
+const skeletonRows = computed(() => Math.min(perPage.value, 5));
+const totalPages = computed(() => Math.ceil(sortedContainers.value.length / perPage.value));
+const isPaginated = computed(() => totalPages.value > 1);
+const currentPage = ref(1);
+watch(perPage, () => (currentPage.value = 1));
+const paginated = computed(() => {
+  const start = (currentPage.value - 1) * perPage.value;
+  const end = start + perPage.value;
+
+  return sortedContainers.value.slice(start, end);
+});
+
+const sortOptions = computed(() =>
+  Object.entries(fields)
+    .filter(([key]) => key !== "host" || multiHost.value)
+    .filter(([key]) => !isKubeletOnly(key) || hasKubeletStats.value)
+    .map(([key, value]) => ({ label: t(value.mobileLabel ?? value.label), value: key })),
+);
+
+const mobileSortField = computed({
+  get: () => sortField.value,
+  set: (field: keys) => {
+    if (field !== sortField.value) sort(field);
+  },
+});
+
+// one line per part of the total, for the cell's native tooltip
+function diskBreakdown(container: Container) {
+  if (container.volumes.length === 0) return undefined;
+  const size = (bytes: number) => formatBytes(bytes, { decimals: 1 });
+  const lines = [t("tooltip.disk-layer", { size: container.sizeRw === undefined ? "–" : size(container.sizeRw) })];
+  for (const v of container.volumes) {
+    lines.push(
+      v.links > 1
+        ? t("tooltip.disk-volume-shared", { name: v.name, size: size(v.size), count: v.links })
+        : `${v.name}: ${size(v.size)}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function sort(field: keys) {
+  if (sortField.value === field) {
+    direction.value *= -1;
+  } else {
+    sortField.value = field;
+    direction.value = 1;
+  }
+}
+const isKubeletOnly = (field: string) => field === "disk" || field === "diskio" || field === "net";
+
+// Whether the column exists here at all, before anyone has hidden it.
+function isAvailable(field: keys) {
+  if (fields[field].sortOnly) return false;
+  // one host means every row would say the same thing
+  if (field === "host" && !multiHost.value) return false;
+  if (isKubeletOnly(field) && !hasKubeletStats.value) return false;
+  return true;
+}
+
+function isVisible(field: keys) {
+  if (!isAvailable(field)) return false;
+  if (isMobile.value) return fields[field].mobileVisible;
+  return field === "name" || !hiddenColumns.value.includes(field);
+}
+
+function headerLabel(field: (typeof fields)[keys]) {
+  if (isMobile.value && field.mobileLabel) return field.mobileLabel;
+  return !average.value && field.rawLabel ? field.rawLabel : field.label;
+}
+
+// What the column picker lists: everything that could show here, less the name.
+const pickableColumns = computed(() =>
+  (Object.keys(fields) as keys[])
+    .filter((key) => key !== "name" && isAvailable(key))
+    .map((key) => ({ key, label: headerLabel(fields[key]) })),
+);
+defineExpose({ pickableColumns });
+</script>
+
+<style scoped>
+@reference "@/main.css";
+
+[data-icon] {
+  display: none;
+  transition: transform 0.2s ease-in-out;
+  [data-direction="desc"] & {
+    transform: rotate(180deg);
+  }
+}
+
+thead tr {
+  @apply bg-base-200/40;
+}
+
+th {
+  @apply text-base-content/50 border-base-content/10 border-b;
+  &.selected-sort {
+    @apply text-base-content/80;
+    [data-icon] {
+      display: inline-block;
+    }
+  }
+}
+
+tbody tr {
+  @apply transition-colors;
+  &:not(:last-child) {
+    @apply border-base-content/[0.06] border-b;
+  }
+}
+
+tbody td {
+  white-space: nowrap;
+}
+
+a {
+  @apply hover:text-primary;
+}
+</style>

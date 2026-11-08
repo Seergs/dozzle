@@ -1,10 +1,40 @@
 ---
 title: Kubernetes Support
+description: Run Dozzle in Kubernetes to view pod logs, with the RBAC, Metrics API and kubelet setup for stats, plus pod restarts, namespaces and filters.
 ---
 
 # Kubernetes Support
 
-Dozzle now supports Kubernetes, allowing you to view logs from your Kubernetes pods. This feature is available in `v8.11` version of Dozzle.
+Dozzle supports Kubernetes, allowing you to view logs from your Kubernetes pods.
+
+## <Icon icon="mdi:package-variant" inline /> Install with Helm
+
+The quickest way to run Dozzle in a cluster is the Helm chart. It creates everything the manual setup below does, and binds the role to whatever namespace you install into.
+
+```bash
+helm install dozzle oci://ghcr.io/amir20/charts/dozzle --namespace dozzle --create-namespace
+```
+
+The chart's version matches the Dozzle release. Settings go through `env`, and the extra permissions for container actions and network and disk stats are switched on with `rbac.actions` and `rbac.nodeStats`:
+
+```yaml
+# values.yaml
+env:
+  - name: DOZZLE_ENABLE_ACTIONS
+    value: "true"
+rbac:
+  actions: true
+  nodeStats: true
+ingress:
+  enabled: true
+  hosts:
+    - host: dozzle.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+```
+
+See [`values.yaml`](https://github.com/amir20/dozzle/blob/main/charts/dozzle/values.yaml) for every option.
 
 ## <Icon icon="mdi:kubernetes" inline /> Kubernetes Setup
 
@@ -139,7 +169,49 @@ To verify that the API is running, you can run the following command:
 kubectl top pod
 ```
 
-For now, this is required to use Dozzle in Kubernetes.
+Without it, logs still work, and CPU and memory stay empty.
+
+The memory bar measures usage against the container's memory limit. A container without a limit is measured against its node's memory, as Docker does.
+
+## <Icon icon="mdi:harddisk" inline /> Network and Disk
+
+The Metrics API has no network or disk numbers. Dozzle can read them from each node's kubelet (`/stats/summary`), the same place metrics-server reads from. This is opt-in: add this rule to the ClusterRole and the network and disk columns appear.
+
+```yaml
+- apiGroups: [""]
+  resources: ["nodes/stats"]
+  verbs: ["get"]
+```
+
+Network is counted per pod, so the pod's traffic shows on the container whose name sorts first and its other containers show none. Disk is the container's writable layer plus the PVCs and `emptyDir` volumes it mounts.
+
+Dozzle calls each kubelet directly on the node's internal IP (port 10250), never through the API server's node proxy. That would need `nodes/proxy`, which allows exec into any container. The kubelet's serving certificate has to be signed by the cluster CA, as it is on k3s. Where kubelets use self-signed certificates (kubeadm's default, kind), the columns stay hidden and Dozzle logs why once.
+
+## <Icon icon="mdi:restart" inline /> Container Actions
+
+With `DOZZLE_ENABLE_ACTIONS=true`, Dozzle can restart a container. Kubernetes has no stop or start for a single container, so restart is the only action. Dozzle restarts by deleting the pod so its controller (a Deployment, StatefulSet, DaemonSet or Job) creates a new one, the same as `kubectl delete pod`. A pod without a controller is never deleted.
+
+Deleting pods needs a permission the read-only role above does not grant. Add this rule to the ClusterRole:
+
+```yaml
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["delete"]
+```
+
+### Rollout Restart
+
+Restarting one pod at a time is the wrong tool for a workload with several replicas. A container that belongs to a Deployment, StatefulSet or DaemonSet also gets a **Restart Deployment** (or StatefulSet, or DaemonSet) action in its menu, and the same action sits in the menu of the workload's merged view in the sidebar. It does what `kubectl rollout restart` does: the controller replaces every pod following the workload's own rollout strategy, so `maxUnavailable` is respected. A pod with `imagePullPolicy: Always` pulls its image again on the way, which is how a `:latest` tag picks up a new image.
+
+Jobs, CronJobs and bare ReplicaSets cannot be rolled out, so the action does not appear for them. Like every other action, it only reaches workloads whose pods pass Dozzle's filters.
+
+Rolling out needs permission to patch the workload. Add this rule to the ClusterRole:
+
+```yaml
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets", "daemonsets"]
+  verbs: ["patch"]
+```
 
 ## <Icon icon="mdi:filter-variant" inline /> Namespaces and Filters
 

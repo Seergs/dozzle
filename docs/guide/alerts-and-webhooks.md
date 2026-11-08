@@ -1,12 +1,13 @@
 ---
-title: Alerts & Webhooks
+title: Alerts
+description: Set up Dozzle alerts on Docker container logs, CPU and memory metrics, and lifecycle events, and send them to a webhook, Slack, Discord, or ntfy.
 ---
 
-# Alerts & Webhooks
+# Alerts
 
-<Badge type="tip" text="New in v10" />
+Dozzle can watch container logs, resource metrics, and lifecycle events, and notify you when a condition you describe is met. Rules are written as expressions, evaluated on your own instance, and delivered to a webhook, Slack, Discord, or ntfy.
 
-Dozzle v10 introduces a powerful alerting system that lets you monitor container logs, resource metrics, and lifecycle events, and receive notifications when specific conditions are met. Alerts use customizable expressions to filter containers and trigger conditions, and can send notifications to webhooks, Slack, Discord, ntfy, or [Dozzle Cloud](/guide/dozzle-cloud).
+Rules always live here, on the self-hosted instance, because that is where your logs are. If you have linked the instance to [Dozzle Cloud](/guide/dozzle-cloud), these same rules feed it, and delivery (grouping, summaries, muting, mobile channels) is configured there instead of per-destination below.
 
 ## <Icon icon="mdi:format-list-bulleted-type" inline /> Alert Types
 
@@ -59,30 +60,61 @@ You can also write your own payload template using Go's `text/template` syntax. 
 
 <div v-pre>
 
-| Variable                  | Description                            |
-| ------------------------- | -------------------------------------- |
-| `{{.Detail}}`             | Summary (log message or metric values) |
-| `{{.Container.Name}}`     | Container name                         |
-| `{{.Container.Image}}`    | Container image                        |
-| `{{.Container.HostName}}` | Docker host name                       |
-| `{{.Container.State}}`    | Container state                        |
-| `{{.Log.Message}}`        | Log message content                    |
-| `{{.Log.Level}}`          | Log level                              |
-| `{{.Log.Timestamp}}`      | Log timestamp                          |
-| `{{.Log.Stream}}`         | Stream type (stdout/stderr)            |
-| `{{.Stat.CPUPercent}}`    | CPU usage percentage                   |
-| `{{.Stat.MemoryPercent}}` | Memory usage percentage                |
-| `{{.Stat.MemoryUsage}}`   | Memory usage in bytes                  |
-| `{{.Subscription.Name}}`  | Alert rule name                        |
+| Variable                  | Description                            | Alerts |
+| ------------------------- | -------------------------------------- | ------ |
+| `{{.Detail}}`             | Summary (log message or metric values) | all    |
+| `{{.Container.Name}}`     | Container name                         | all    |
+| `{{.Container.Image}}`    | Container image                        | all    |
+| `{{.Container.HostName}}` | Docker host name                       | all    |
+| `{{.Container.State}}`    | Container state                        | all    |
+| `{{.Log.Message}}`        | Log message content                    | log    |
+| `{{.Log.Level}}`          | Log level                              | log    |
+| `{{.Log.Timestamp}}`      | Log timestamp                          | log    |
+| `{{.Log.Stream}}`         | Stream type (stdout/stderr)            | log    |
+| `{{.Stat.CPUPercent}}`    | CPU usage percentage                   | metric |
+| `{{.Stat.MemoryPercent}}` | Memory usage percentage                | metric |
+| `{{.Stat.MemoryUsage}}`   | Memory usage in bytes                  | metric |
+| `{{.Event.Name}}`         | Event name (event alerts)              | event  |
+| `{{.Event.Attributes}}`   | Event attributes map (event alerts)    | event  |
+| `{{.Subscription.Name}}`  | Alert rule name                        | all    |
+| `{{.Timestamp}}`          | Time the notification was created      | all    |
+
+`.Log`, `.Stat` and `.Event` are only set on their own kind of alert. A destination receives every kind, so a template that reads `{{.Log.Level}}` fails to send for metric and event alerts, including update notices. Guard those fields with `{{ with .Log }}{{ .Level }}{{ end }}`, or use `{{.Detail}}`, which every alert sets. The **Test** button warns when the template fails for a kind of alert it did not send.
+
+`{{.Timestamp}}` prints in Go's default time format, which services like Discord reject. Format it as ISO 8601 instead:
+
+```json
+{
+  "embeds": [{ "timestamp": "{{ .Timestamp.UTC.Format `2006-01-02T15:04:05Z07:00` }}" }]
+}
+```
 
 </div>
 
 > [!TIP]
 > Use the **Test** button to verify your webhook is working before saving.
 
-### Dozzle Cloud
+#### Keeping the URL out of the file
 
-You can also send alerts to [Dozzle Cloud](/guide/dozzle-cloud) for centralized monitoring across multiple Dozzle instances. See the [Dozzle Cloud guide](/guide/dozzle-cloud) for more details.
+Webhook URLs for Slack, Discord and similar services contain the token. To keep `notifications.yml` in version control, put the URL in an environment variable and reference it with `${VAR}` in the URL or any header value. The same works when typing into the form.
+
+```yaml
+dispatchers:
+  - id: 1
+    name: Slack
+    type: webhook
+    url: ${SLACK_WEBHOOK_URL}
+    headers:
+      Authorization: Bearer ${NTFY_TOKEN}
+```
+
+The placeholder is what Dozzle saves and shows. The value is read when a notification is sent, from the environment of whichever Dozzle sends it. With [agents](/guide/agent), alerts on an agent's containers are sent by that agent, so set the variable on each agent too. If it is missing there, the send fails with `environment variable ... is not set`.
+
+Only the `${VAR}` form is expanded; a bare `$VAR` is left as is. Variables starting with `DOZZLE_`, `AWS_`, `GOOGLE_`, `AZURE_`, `KUBERNETES_` or `DOCKER_` are refused, since anyone who can edit a webhook decides where it posts. Any other variable in Dozzle's environment can be read this way, so don't keep unrelated secrets there.
+
+### Dozzle Cloud <CloudBadge />
+
+Linked instances get **Dozzle Cloud** as a destination automatically. Unlike a raw webhook it groups repeated failures into a single notification, summarizes what happened, and fans out to email, Telegram, Discord, Slack, ntfy, and browser push without configuring each one here. See [Dozzle Cloud](/guide/dozzle-cloud).
 
 ## <Icon icon="mdi:plus-circle-outline" inline /> Creating an Alert
 
@@ -229,6 +261,20 @@ Common Docker event names include `start`, `stop`, `die`, `kill`, `oom`, `restar
 
 For `health_status` events, Dozzle exposes the current state as `attributes["healthStatus"]` (`healthy` or `unhealthy`).
 
+### Update Available
+
+Dozzle also raises an `update_available` event when a newer image is published for a container. Once a day, at a random time, it checks every container not labeled `dev.dozzle.update: off`, and alerts once per new image. A restart of Dozzle can repeat an alert for an update it already sent. The check only runs while at least one event alert is enabled, and not at all when `--image-check-mode` is `manual` or `off`.
+
+| Attribute        | Description                        |
+| ---------------- | ---------------------------------- |
+| `image`          | Image reference the container runs |
+| `currentVersion` | Version of the running image       |
+| `latestVersion`  | Version of the newer image         |
+| `currentDigest`  | Digest of the running image        |
+| `latestDigest`   | Digest of the newer image          |
+
+Versions come from the image's `org.opencontainers.image.version` label. Many images don't set it, so either version can be empty. Dozzle also skips reading the new version when your Docker Hub pull limit is running low.
+
 ### Event Examples
 
 **Alert when any production container dies:**
@@ -251,6 +297,23 @@ Event:     name == "oom"
 Container: true
 Event:     name == "health_status" && attributes["healthStatus"] == "unhealthy"
 ```
+
+**Alert when a newer image is available:**
+
+```
+Container: true
+Event:     name == "update_available"
+```
+
+In a webhook template, the versions are under `.Event.Attributes`:
+
+<div v-pre>
+
+```
+New version for {{ .Container.Name }}: {{ .Event.Attributes.currentVersion }} -> {{ .Event.Attributes.latestVersion }}
+```
+
+</div>
 
 **Alert on unexpected exits (ignoring clean and graceful shutdowns):**
 

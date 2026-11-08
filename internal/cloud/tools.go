@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"github.com/amir20/dozzle/internal/container"
+	"github.com/amir20/dozzle/internal/imagecheck"
 	"github.com/amir20/dozzle/internal/notification"
-	container_support "github.com/amir20/dozzle/internal/support/container"
 	pb "github.com/amir20/dozzle/proto/cloud"
 	"github.com/rs/zerolog/log"
 )
@@ -15,7 +15,7 @@ import (
 // ToolHostService is the subset of HostService needed by tool execution.
 type ToolHostService interface {
 	ListAllContainers(labels container.ContainerLabels) ([]container.Container, []error)
-	FindContainer(host string, id string, labels container.ContainerLabels) (*container_support.ContainerService, error)
+	FindContainer(host string, id string, labels container.ContainerLabels) (*container.ContainerService, error)
 	Hosts() []container.Host
 }
 
@@ -31,14 +31,18 @@ const (
 	toolStreamLogs               = "stream_logs"
 	toolListNotifications        = "list_notifications"
 	toolInspectContainer         = "inspect_container"
+	toolInspectContainers        = "inspect_containers"
 	toolStartContainer           = "start_container"
 	toolStopContainer            = "stop_container"
 	toolRestartContainer         = "restart_container"
 	toolRemoveContainer          = "remove_container"
 	toolUpdateContainer          = "update_container"
+	toolRollbackContainer        = "rollback_container"
 	toolCreateLogNotification    = "create_log_notification"
 	toolCreateMetricNotification = "create_metric_notification"
 	toolCreateEventNotification  = "create_event_notification"
+	toolRetroScan                = "retro_scan"
+	toolCheckImageUpdates        = "check_image_updates"
 )
 
 type paramProperty struct {
@@ -67,9 +71,12 @@ var (
 		Properties: map[string]paramProperty{},
 	})
 
-	containerIDParam = paramProperty{Type: "string", Description: "Container name or ID. You can pass the container name directly (as shown in logs, events, and find_containers) — it does not need to be the opaque ID. Resolved by exact name first, then ID, then a unique name substring. When a name matches several containers (e.g. a Swarm service with stopped task corpses, or multiple replicas), read-only tools (inspect/logs) resolve to the most relevant one — the running replica, or the most-recently-active if all are stopped — and tell you which one (and its siblings) in the result, so you don't need to look up the ID first. Write tools (start/stop/restart/remove/update) never guess between live containers: an ambiguous name fails with the candidate list so you can re-issue with an exact ID."}
-	hostIDParam      = paramProperty{Type: "string", Description: "Host name or ID (from list_hosts or find_containers). Optional — omit it when the container name is unique across all hosts; supply it (name or ID) only to scope to a specific host when a name is ambiguous."}
-	boolFalse        = false
+	containerIDParam = paramProperty{Type: "string", Description: "Container name or ID; a name works directly, no lookup needed. Resolved by ID, then exact name, then a unique name substring. A name matching several containers resolves to the running (or most recently active) one, and the result names its siblings."}
+	// writeContainerIDParam is the write tools' variant: they never pick between
+	// matches, so the read-side resolution notes would only cost tokens.
+	writeContainerIDParam = paramProperty{Type: "string", Description: "Container name or ID. Never guesses between live containers: an ambiguous name fails with the candidate list, then re-issue with the exact ID."}
+	hostIDParam           = paramProperty{Type: "string", Description: "Host name or ID (from list_hosts or find_containers). Optional — omit it when the container name is unique across all hosts; supply it (name or ID) only to scope to a specific host when a name is ambiguous."}
+	boolFalse             = false
 
 	targetedParams = mustSchema(paramSchema{
 		Type: "object",
@@ -78,6 +85,27 @@ var (
 			"host_id":      hostIDParam,
 		},
 		Required:             []string{"container_id"},
+		AdditionalProperties: &boolFalse,
+	})
+
+	writeTargetedParams = mustSchema(paramSchema{
+		Type: "object",
+		Properties: map[string]paramProperty{
+			"container_id": writeContainerIDParam,
+			"host_id":      hostIDParam,
+		},
+		Required:             []string{"container_id"},
+		AdditionalProperties: &boolFalse,
+	})
+
+	rollbackContainerParams = mustSchema(paramSchema{
+		Type: "object",
+		Properties: map[string]paramProperty{
+			"container_id":         writeContainerIDParam,
+			"host_id":              hostIDParam,
+			"expected_from_digest": {Type: "string", Description: "The digest the container runs now (repo@sha256:... or sha256:...). Refused if it runs anything else."},
+		},
+		Required:             []string{"container_id", "expected_from_digest"},
 		AdditionalProperties: &boolFalse,
 	})
 
@@ -93,7 +121,7 @@ var (
 
 	instanceIDParam = paramProperty{
 		Type:        "string",
-		Description: "The Dozzle instance to target. Get this from list_dozzle_instances. Alerts are scoped to a whole Dozzle instance, not a single Docker host.",
+		Description: "The Dozzle instance to target. Use an instance_id from the connected-instance list you were given (or list_dozzle_instances). Alerts are scoped to a whole Dozzle instance, not a single Docker host.",
 	}
 
 	listNotificationsParams = mustSchema(paramSchema{
@@ -107,8 +135,8 @@ var (
 
 	containerExpressionParam = paramProperty{
 		Type: "string",
-		Description: `Required. expr-lang expression selecting which containers trigger the alert. Use "true" to match every container — this is the right default whenever the user asks for an alert without naming a specific target ("all my containers", "any error", "logs of type error" with no target named). Only write a filter when the user names containers or gives a pattern. Available fields when filtering: name, id, image, state, health, host, labels.
-Examples: true (match every container — default for unscoped asks); name contains "nginx"; state == "running"; image matches "redis.*"; name contains "api" && health == "healthy".`,
+		Description: `Required. expr-lang expression selecting which containers trigger the alert. Use "true" (every container) whenever the user names no specific target — that is the default. Filter only when they name containers or a pattern. Fields: name, id, image, state, health, host, labels.
+Examples: true; name contains "nginx"; image matches "redis.*"; name contains "api" && health == "healthy".`,
 	}
 
 	createLogNotificationParams = mustSchema(paramSchema{
@@ -176,6 +204,26 @@ Examples: name == "die"; name == "oom"; name in ["die", "oom", "kill"]; name == 
 		AdditionalProperties: &boolFalse,
 	})
 
+	retroScanParams = mustSchema(paramSchema{
+		Type: "object",
+		Properties: map[string]paramProperty{
+			"since":            {Type: "string", Description: "RFC3339 start of the window. Defaults to 24 hours ago; capped at 7 days."},
+			"levels":           {Type: "string", Description: "Comma-separated levels to count and keep, e.g. \"error,fatal,warn\" (the default)."},
+			"deadline_seconds": {Type: "integer", Description: "How long the scan may run (default 60, max 300). Containers not reached are reported unscanned."},
+		},
+		AdditionalProperties: &boolFalse,
+	})
+
+	checkImageUpdatesParams = mustSchema(paramSchema{
+		Type: "object",
+		Properties: map[string]paramProperty{
+			"name":    {Type: "string", Description: "Optional container name to check (partial match supported). Omit to check every container."},
+			"image":   {Type: "string", Description: "Optional image name to check (partial match supported)."},
+			"refresh": {Type: "boolean", Description: "Optional. Ask the registries again instead of answering from the cache, which can be up to 6 hours old. Only when the user says they just pushed an image or doubts the answer."},
+		},
+		AdditionalProperties: &boolFalse,
+	})
+
 	streamLogsParams = mustSchema(paramSchema{
 		Type: "object",
 		Properties: map[string]paramProperty{
@@ -190,8 +238,11 @@ Examples: name == "die"; name == "oom"; name in ["die", "oom", "kill"]; name == 
 	})
 )
 
-// AvailableTools returns the list of tool definitions based on configuration.
-func AvailableTools(enableActions bool) []*pb.ToolDefinition {
+// AvailableTools lists the tools deps' principal may actually invoke. Filtering
+// here rather than only at dispatch means the model never proposes something it
+// will then be refused for.
+func AvailableTools(deps ToolDeps) []*pb.ToolDefinition {
+	enableActions, p := deps.EnableActions, deps.Principal
 	tools := []*pb.ToolDefinition{
 		{
 			Name:           toolListHosts,
@@ -202,7 +253,7 @@ func AvailableTools(enableActions bool) []*pb.ToolDefinition {
 		},
 		{
 			Name:           toolFindContainers,
-			Description:    "Search for Docker containers by name, state, or health status. All parameters are optional. Returns container ID, name, image, state, health, and host. The container-scoped tools (inspect/logs/start/stop/restart/remove/update) accept a name directly, so you usually don't need to look up the ID first — use this when you want to disambiguate a name that matches multiple containers.",
+			Description:    "List or search Docker containers. With no filters it returns EVERY container, including stopped and exited ones; filter by name, image, state, or health to narrow. Returns ID, name, image, state, health, host, and start time. Container-scoped tools accept a name directly, so you don't need this just to get an ID — use it for inventory, state, or to disambiguate a name.",
 			ParametersJson: findContainerParams,
 			Scope:          pb.ToolScope_TOOL_SCOPE_INSTANCE,
 			ReadOnly:       true,
@@ -250,6 +301,22 @@ func AvailableTools(enableActions bool) []*pb.ToolDefinition {
 			ReadOnly:       true,
 		},
 		{
+			Name:           toolRetroScan,
+			Description:    "Read every container's logs since a point in time in one pass, returning true per-level counts, the newest matching lines, and each container's restart count and last exit. For the cloud's first look at a newly linked instance; never offered to a model.",
+			ParametersJson: retroScanParams,
+			Scope:          pb.ToolScope_TOOL_SCOPE_INSTANCE,
+			ReadOnly:       true,
+			Internal:       true,
+		},
+		{
+			Name:           toolInspectContainers,
+			Description:    "inspect_container for every visible container in one call. For the cloud's daily scan; never offered to a model.",
+			ParametersJson: noParams,
+			Scope:          pb.ToolScope_TOOL_SCOPE_INSTANCE,
+			ReadOnly:       true,
+			Internal:       true,
+		},
+		{
 			Name:           toolInspectContainer,
 			Description:    "Get detailed configuration of a Docker container including environment variables, port mappings, mounts, restart policy, network mode, labels, and resource limits.",
 			ParametersJson: targetedParams,
@@ -258,36 +325,54 @@ func AvailableTools(enableActions bool) []*pb.ToolDefinition {
 		},
 	}
 
+	// A cloud call is someone asking, so manual mode answers it too. Off means
+	// Dozzle never contacts a registry, so the tool does not exist.
+	if deps.ImageCheckMode.Allows(true) {
+		tools = append(tools, &pb.ToolDefinition{
+			Name:           toolCheckImageUpdates,
+			Description:    "Check which containers run an outdated image: asks each image's registry whether its tag now points to a newer image than the one the container runs. Use it for \"what needs updating\" or \"is X up to date\". Each container's status is up-to-date, update-available, pinned (digest-pinned, cannot drift), not-checkable (built locally), auth-required (private registry), skipped (opted out by label) or unknown. Updating is a separate step: call update_container only after the user confirms which containers to update.",
+			ParametersJson: checkImageUpdatesParams,
+			Scope:          pb.ToolScope_TOOL_SCOPE_INSTANCE,
+			ReadOnly:       true,
+		})
+	}
+
 	if enableActions {
 		tools = append(tools,
 			&pb.ToolDefinition{
 				Name:           toolStartContainer,
 				Description:    "Start a stopped Docker container",
-				ParametersJson: targetedParams,
+				ParametersJson: writeTargetedParams,
 				Scope:          pb.ToolScope_TOOL_SCOPE_CONTAINER,
 			},
 			&pb.ToolDefinition{
 				Name:           toolStopContainer,
 				Description:    "Stop a running Docker container",
-				ParametersJson: targetedParams,
+				ParametersJson: writeTargetedParams,
 				Scope:          pb.ToolScope_TOOL_SCOPE_CONTAINER,
 			},
 			&pb.ToolDefinition{
 				Name:           toolRestartContainer,
 				Description:    "Restart a Docker container",
-				ParametersJson: targetedParams,
+				ParametersJson: writeTargetedParams,
 				Scope:          pb.ToolScope_TOOL_SCOPE_CONTAINER,
 			},
 			&pb.ToolDefinition{
 				Name:           toolRemoveContainer,
 				Description:    "Remove a Docker container. The container must be stopped first — call stop_container if it is still running. Confirm with the user before removing, since the container is gone permanently.",
-				ParametersJson: targetedParams,
+				ParametersJson: writeTargetedParams,
 				Scope:          pb.ToolScope_TOOL_SCOPE_CONTAINER,
 			},
 			&pb.ToolDefinition{
 				Name:           toolUpdateContainer,
-				Description:    "Update a Docker container by pulling the latest version of its image and recreating it with the same configuration. If the image is already up to date, no recreation occurs. For swarm service containers, updates the service instead.",
-				ParametersJson: targetedParams,
+				Description:    "Update a Docker container by pulling the latest version of its image and recreating it with the same configuration. If the image is already up to date, no recreation occurs. For swarm service containers, updates the service instead. A stopped container is never updated: it has to be started first.",
+				ParametersJson: writeTargetedParams,
+				Scope:          pb.ToolScope_TOOL_SCOPE_CONTAINER,
+			},
+			&pb.ToolDefinition{
+				Name:           toolRollbackContainer,
+				Description:    "Roll a Docker container back to the image it ran before its last update, keeping its configuration and volumes. Only after the user confirms. Not for swarm services or stopped containers.",
+				ParametersJson: rollbackContainerParams,
 				Scope:          pb.ToolScope_TOOL_SCOPE_CONTAINER,
 			},
 			&pb.ToolDefinition{
@@ -311,7 +396,13 @@ func AvailableTools(enableActions bool) []*pb.ToolDefinition {
 		)
 	}
 
-	return tools
+	allowed := tools[:0]
+	for _, t := range tools {
+		if p.mayCall(t.Name, enableActions) == nil {
+			allowed = append(allowed, t)
+		}
+	}
+	return allowed
 }
 
 // NotificationService is the subset of the notification manager exposed to
@@ -326,10 +417,28 @@ type NotificationService interface {
 // NotificationService may be nil in modes without a notification manager
 // (e.g., k8s); notification tools will then return a "not configured" error.
 type ToolDeps struct {
-	EnableActions       bool
-	HostService         ToolHostService
-	Labels              container.ContainerLabels
+	EnableActions bool
+	// ImageCheckMode is --image-check-mode. The zero value offers no image
+	// update checks.
+	ImageCheckMode imagecheck.Mode
+	HostService    ToolHostService
+	// Principal is who the call runs as. The zero value is PrincipalAPIKey,
+	// which is what every tool call meant before principals existed, so an
+	// unset field never grants more than it used to.
+	Principal           Principal
 	NotificationService NotificationService
+	// ConfigHostService is the hosts whose container configs this process
+	// sends, or nil to send none. It is narrower than HostService on a server
+	// with --remote-agent: each agent sends its own, hashed with its own key,
+	// so the server must not send them too.
+	ConfigHostService ConfigStreamHostService
+}
+
+// scoped returns the host service already confined to the principal's labels.
+// Tools use this instead of HostService so there is no way to ask for
+// containers the caller may not see.
+func (d ToolDeps) scoped() scopedHost {
+	return scopedHost{hosts: d.HostService, labels: d.Principal.Labels}
 }
 
 // ExecuteTool dispatches a tool call by name and returns a proto CallToolResponse.
@@ -345,25 +454,13 @@ func ExecuteTool(ctx context.Context, name string, argsJSON string, deps ToolDep
 	return resp
 }
 
-// requiresActions lists tools gated behind --enable-actions.
-var requiresActions = map[string]struct{}{
-	toolStartContainer:           {},
-	toolStopContainer:            {},
-	toolRestartContainer:         {},
-	toolRemoveContainer:          {},
-	toolUpdateContainer:          {},
-	toolCreateLogNotification:    {},
-	toolCreateMetricNotification: {},
-	toolCreateEventNotification:  {},
-}
-
 func executeTool(ctx context.Context, name string, argsJSON string, deps ToolDeps) (*pb.CallToolResponse, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 
-	if _, gated := requiresActions[name]; gated && !deps.EnableActions {
-		return nil, fmt.Errorf("container actions are not enabled")
+	if err := deps.Principal.mayCall(name, deps.EnableActions); err != nil {
+		return nil, err
 	}
 
 	switch name {
@@ -380,13 +477,21 @@ func executeTool(ctx context.Context, name string, argsJSON string, deps ToolDep
 	case toolFetchContainerLogs:
 		return executeFetchContainerLogs(ctx, argsJSON, deps)
 	case toolInspectContainer:
-		return executeInspectContainer(argsJSON, deps)
+		return executeInspectContainer(ctx, argsJSON, deps)
+	case toolRetroScan:
+		return executeRetroScan(ctx, argsJSON, deps)
+	case toolInspectContainers:
+		return executeInspectContainers(ctx, deps)
 	case toolListNotifications:
 		return executeListNotifications(deps)
+	case toolCheckImageUpdates:
+		return executeCheckImageUpdates(ctx, argsJSON, deps)
 	case toolStartContainer, toolStopContainer, toolRestartContainer, toolRemoveContainer:
 		return executeContainerAction(ctx, name, argsJSON, deps)
 	case toolUpdateContainer:
 		return executeUpdateContainer(ctx, argsJSON, deps)
+	case toolRollbackContainer:
+		return executeRollbackContainer(ctx, argsJSON, deps)
 	case toolCreateLogNotification:
 		return executeCreateLogNotification(argsJSON, deps)
 	case toolCreateMetricNotification:

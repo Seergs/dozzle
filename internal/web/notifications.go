@@ -4,21 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"time"
 
+	"github.com/amir20/dozzle/internal/analytics"
 	"github.com/amir20/dozzle/internal/auth"
 	"github.com/amir20/dozzle/internal/cache"
 	"github.com/amir20/dozzle/internal/container"
 	"github.com/amir20/dozzle/internal/notification"
 	"github.com/amir20/dozzle/internal/notification/dispatcher"
 	"github.com/amir20/dozzle/internal/releases"
+	"github.com/amir20/dozzle/internal/web/search"
 	"github.com/amir20/dozzle/types"
 	"github.com/expr-lang/expr"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
-	orderedmap "github.com/wk8/go-ordered-map/v2"
 )
 
 // Response types for JSON serialization
@@ -32,6 +34,7 @@ type NotificationRuleResponse struct {
 	EventExpression     string              `json:"eventExpression,omitempty"`
 	Cooldown            int                 `json:"cooldown,omitempty"`
 	SampleWindow        int                 `json:"sampleWindow,omitempty"`
+	Immediate           bool                `json:"immediate,omitempty"`
 	TriggerCount        int64               `json:"triggerCount"`
 	TriggeredContainers int                 `json:"triggeredContainers"`
 	LastTriggeredAt     *time.Time          `json:"lastTriggeredAt"`
@@ -58,6 +61,7 @@ type NotificationRuleInput struct {
 	EventExpression     string `json:"eventExpression,omitempty"`
 	Cooldown            int    `json:"cooldown,omitempty"`
 	SampleWindow        int    `json:"sampleWindow,omitempty"`
+	Immediate           bool   `json:"immediate,omitempty"`
 }
 
 type NotificationRuleUpdateInput struct {
@@ -70,6 +74,7 @@ type NotificationRuleUpdateInput struct {
 	EventExpression     *string `json:"eventExpression,omitempty"`
 	Cooldown            *int    `json:"cooldown,omitempty"`
 	SampleWindow        *int    `json:"sampleWindow,omitempty"`
+	Immediate           *bool   `json:"immediate,omitempty"`
 }
 
 type DispatcherInput struct {
@@ -85,6 +90,7 @@ type PreviewInput struct {
 	LogExpression       *string `json:"logExpression,omitempty"`
 	MetricExpression    *string `json:"metricExpression,omitempty"`
 	EventExpression     *string `json:"eventExpression,omitempty"`
+	SampleWindow        int     `json:"sampleWindow,omitempty"`
 }
 
 type PreviewResult struct {
@@ -96,6 +102,37 @@ type PreviewResult struct {
 	MatchedLogs       []container.LogEvent  `json:"matchedLogs"`
 	TotalLogs         int                   `json:"totalLogs"`
 	MessageKeys       []string              `json:"messageKeys,omitempty"`
+	// ScannedContainers is how many of the matched containers were actually read for logs.
+	// The scan is capped so a broad container filter can't stall the form.
+	ScannedContainers int            `json:"scannedContainers"`
+	LogWindowSeconds  int            `json:"logWindowSeconds"`
+	MetricSamples     []MetricSample `json:"metricSamples,omitempty"`
+	EventSamples      []EventSample  `json:"eventSamples,omitempty"`
+}
+
+// MetricSample is a per-container dry run of the metric expression against the stats Dozzle
+// already has buffered. It lets the alert form show what the rule would do right now instead
+// of only whether the expression compiles.
+type MetricSample struct {
+	ContainerID    string  `json:"containerId"`
+	Name           string  `json:"name"`
+	Host           string  `json:"host"`
+	CPU            float64 `json:"cpu"`
+	Memory         float64 `json:"memory"`
+	MemoryUsage    float64 `json:"memoryUsage"`
+	Matches        bool    `json:"matches"`
+	MatchedSamples int     `json:"matchedSamples"`
+	TotalSamples   int     `json:"totalSamples"`
+	WouldTrigger   bool    `json:"wouldTrigger"`
+}
+
+// EventSample is one representative container event from previewEventCatalog, tagged with
+// whether the event expression matches it. Docker events aren't retained anywhere, so this is
+// a dry run against realistic samples rather than against history.
+type EventSample struct {
+	Name       string            `json:"name"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+	Matches    bool              `json:"matches"`
 }
 
 type TestWebhookInput struct {
@@ -108,6 +145,8 @@ type TestWebhookResult struct {
 	Success    bool    `json:"success"`
 	StatusCode *int    `json:"statusCode,omitempty"`
 	Error      *string `json:"error,omitempty"`
+	// Unsupported lists the alert kinds (log, metric, event) the template fails to render.
+	Unsupported []string `json:"unsupported,omitempty"`
 }
 
 // Helper functions
@@ -162,6 +201,7 @@ func subscriptionToResponse(sub *notification.Subscription, dispatchers []notifi
 		EventExpression:     sub.EventExpression,
 		Cooldown:            sub.Cooldown,
 		SampleWindow:        sub.SampleWindow,
+		Immediate:           sub.Immediate,
 		TriggerCount:        triggerCount,
 		LastTriggeredAt:     lastTriggeredAt,
 		TriggeredContainers: triggeredContainers,
@@ -257,6 +297,7 @@ func (h *handler) createNotificationRule(w http.ResponseWriter, r *http.Request)
 		EventExpression:     input.EventExpression,
 		Cooldown:            input.Cooldown,
 		SampleWindow:        input.SampleWindow,
+		Immediate:           input.Immediate,
 	}
 
 	if err := h.hostService.AddSubscription(sub); err != nil {
@@ -264,6 +305,7 @@ func (h *handler) createNotificationRule(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	analytics.Count("rules.create")
 	writeJSON(w, http.StatusCreated, subscriptionToResponse(sub, h.hostService.Dispatchers(), nil))
 }
 
@@ -291,6 +333,7 @@ func (h *handler) replaceNotificationRule(w http.ResponseWriter, r *http.Request
 		EventExpression:     input.EventExpression,
 		Cooldown:            input.Cooldown,
 		SampleWindow:        input.SampleWindow,
+		Immediate:           input.Immediate,
 	}
 
 	if err := h.hostService.ReplaceSubscription(sub); err != nil {
@@ -298,6 +341,7 @@ func (h *handler) replaceNotificationRule(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	analytics.Count("rules.edit")
 	writeJSON(w, http.StatusOK, subscriptionToResponse(sub, h.hostService.Dispatchers(), nil))
 }
 
@@ -342,6 +386,9 @@ func (h *handler) updateNotificationRule(w http.ResponseWriter, r *http.Request)
 	if input.SampleWindow != nil {
 		updates["sampleWindow"] = *input.SampleWindow
 	}
+	if input.Immediate != nil {
+		updates["immediate"] = *input.Immediate
+	}
 
 	if err := h.hostService.UpdateSubscription(id, updates); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -353,6 +400,7 @@ func (h *handler) updateNotificationRule(w http.ResponseWriter, r *http.Request)
 	agentStats := h.hostService.FetchAgentNotificationStats()
 	for _, sub := range h.hostService.Subscriptions() {
 		if sub.ID == id {
+			analytics.Count("rules.edit")
 			writeJSON(w, http.StatusOK, subscriptionToResponse(sub, dispatchers, agentStats))
 			return
 		}
@@ -521,6 +569,134 @@ func (h *handler) requireNotificationsRole(next http.Handler) http.Handler {
 	})
 }
 
+const (
+	// previewLogWindow is how far back the log preview reads. Kept in the response so the
+	// form can describe the window it is showing without hardcoding a duplicate value.
+	previewLogWindow = 2 * time.Hour
+	// previewMaxLogs is how many matching log lines are returned as examples.
+	previewMaxLogs = 10
+	// previewMaxLogContainers caps how many matched containers are read for logs. A filter
+	// like `state == "running"` can match hundreds of containers and reading all of them
+	// would block the drawer for the full request timeout.
+	previewMaxLogContainers = 10
+	// previewMaxMetricSamples caps how many per-container metric rows are returned.
+	previewMaxMetricSamples = 20
+)
+
+// previewEventCatalog is a set of representative container events used to dry-run event
+// expressions. Docker events are not retained anywhere, so instead of showing nothing until
+// an event happens, the form shows which of these an expression would match. Names are the
+// ones the event listener allows through, with health events already normalized.
+var previewEventCatalog = []types.NotificationEvent{
+	{Name: "start"},
+	{Name: "stop"},
+	{Name: "die", Attributes: map[string]string{"exitCode": "0"}},
+	{Name: "die", Attributes: map[string]string{"exitCode": "1"}},
+	{Name: "restart"},
+	{Name: "kill", Attributes: map[string]string{"signal": "SIGKILL"}},
+	{Name: "oom"},
+	{Name: "health_status", Attributes: map[string]string{"healthStatus": "healthy"}},
+	{Name: "health_status", Attributes: map[string]string{"healthStatus": "unhealthy"}},
+	{Name: notification.UpdateEventName, Attributes: map[string]string{"source": container.UpdateSourceSchedule, "rolledBack": "false"}},
+	{Name: notification.UpdateEventName, Attributes: map[string]string{"source": container.UpdateSourceSchedule, "rolledBack": "true"}},
+	{Name: notification.UpdateAvailableEventName, Attributes: map[string]string{"image": "nginx:latest", "currentVersion": "1.27.0", "latestVersion": "1.27.1"}},
+}
+
+// previewEventSamples evaluates the event expression against previewEventCatalog.
+func previewEventSamples(sub *notification.Subscription) []EventSample {
+	if sub.EventProgram == nil {
+		return nil
+	}
+
+	samples := make([]EventSample, 0, len(previewEventCatalog))
+	for _, event := range previewEventCatalog {
+		event.Timestamp = time.Now()
+		if event.Attributes == nil {
+			// Expressions that index attributes must not blow up on the events that carry none.
+			event.Attributes = map[string]string{}
+		}
+		samples = append(samples, EventSample{
+			Name:       event.Name,
+			Attributes: event.Attributes,
+			Matches:    sub.MatchesEvent(event),
+		})
+	}
+	return samples
+}
+
+// previewMetricSamples replays the metric expression over the stats already buffered for each
+// matched container. WouldTrigger mirrors Subscription.RecordMetricSample: a full sample window
+// where at least 80% of samples match.
+func previewMetricSamples(sub *notification.Subscription, containers []container.Container, sampleWindow int) []MetricSample {
+	if sub.MetricProgram == nil || len(containers) == 0 {
+		return nil
+	}
+
+	window := (&notification.Subscription{SampleWindow: sampleWindow}).GetSampleWindowSeconds()
+	samples := make([]MetricSample, 0, len(containers))
+
+	for _, c := range containers {
+		sample := MetricSample{ContainerID: c.ID, Name: c.Name, Host: c.Host}
+
+		if c.Stats != nil {
+			stats := c.Stats.Data()
+			if len(stats) > window {
+				stats = stats[len(stats)-window:]
+			}
+
+			mounts := notification.FromContainerMounts(c)
+			for _, stat := range stats {
+				sample.Matches = sub.MatchesMetric(types.NotificationStat{
+					CPUPercent:    stat.CPUPercent,
+					MemoryPercent: stat.MemoryPercent,
+					MemoryUsage:   stat.MemoryUsage,
+					Mounts:        mounts,
+				})
+				if sample.Matches {
+					sample.MatchedSamples++
+				}
+			}
+
+			sample.TotalSamples = len(stats)
+			if len(stats) > 0 {
+				latest := stats[len(stats)-1]
+				sample.CPU = latest.CPUPercent
+				sample.Memory = latest.MemoryPercent
+				sample.MemoryUsage = latest.MemoryUsage
+			}
+
+			if window <= 1 {
+				sample.WouldTrigger = sample.Matches
+			} else {
+				sample.WouldTrigger = sample.TotalSamples >= window &&
+					float64(sample.MatchedSamples)/float64(sample.TotalSamples) >= 0.8
+			}
+		}
+
+		samples = append(samples, sample)
+	}
+
+	// Surface the containers closest to firing first, so a long list stays useful when truncated.
+	sort.SliceStable(samples, func(i, j int) bool {
+		a, b := samples[i], samples[j]
+		if a.WouldTrigger != b.WouldTrigger {
+			return a.WouldTrigger
+		}
+		if a.Matches != b.Matches {
+			return a.Matches
+		}
+		if a.MatchedSamples != b.MatchedSamples {
+			return a.MatchedSamples > b.MatchedSamples
+		}
+		return a.Name < b.Name
+	})
+
+	if len(samples) > previewMaxMetricSamples {
+		samples = samples[:previewMaxMetricSamples]
+	}
+	return samples
+}
+
 // Preview and test handlers
 func (h *handler) previewExpression(w http.ResponseWriter, r *http.Request) {
 	var input PreviewInput
@@ -571,52 +747,75 @@ func (h *handler) previewExpression(w http.ResponseWriter, r *http.Request) {
 
 	// Compile metric expression
 	if sub.MetricExpression != "" {
-		_, err := expr.Compile(sub.MetricExpression, expr.Env(types.NotificationStat{}))
+		program, err := expr.Compile(sub.MetricExpression, expr.Env(types.NotificationStat{}))
 		if err != nil {
 			errStr := err.Error()
 			result.MetricError = &errStr
+		} else {
+			sub.MetricProgram = program
 		}
 	}
 
 	if sub.EventExpression != "" {
-		_, err := expr.Compile(sub.EventExpression, expr.Env(types.NotificationEvent{}))
+		program, err := expr.Compile(sub.EventExpression, expr.Env(types.NotificationEvent{}))
 		if err != nil {
 			errStr := err.Error()
 			result.EventError = &errStr
+		} else {
+			sub.EventProgram = program
 		}
 	}
 
 	// Find matching running containers
 	if sub.ContainerProgram != nil {
 		containers, _ := h.hostService.ListAllContainers(h.resolveLabels(r))
+		hosts := make(map[string]container.Host)
+		for _, host := range h.hostService.Hosts() {
+			hosts[host.ID] = host
+		}
 		for _, c := range containers {
 			if c.State != "running" {
 				continue
 			}
-			// Pass empty host for matching - host fields aren't used in container expressions
-			nc := notification.FromContainerModel(c, container.Host{})
+			host, ok := hosts[c.Host]
+			if !ok {
+				host = container.Host{ID: c.Host}
+			}
+			nc := notification.FromContainerModel(c, host)
 			if sub.MatchesContainer(nc) {
 				result.MatchedContainers = append(result.MatchedContainers, c)
 			}
 		}
 	}
 
+	// Dry-run the metric expression against buffered stats, and the event expression against
+	// a catalog of representative events. Neither needs a live subscription, so both give the
+	// form something concrete to show the moment the expression compiles.
+	result.MetricSamples = previewMetricSamples(sub, result.MatchedContainers, input.SampleWindow)
+	result.EventSamples = previewEventSamples(sub)
+
 	// Fetch real logs from matched containers
+	result.LogWindowSeconds = int(previewLogWindow / time.Second)
 	if len(result.MatchedContainers) > 0 {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 
-		const maxLogs = 10
 		totalMatched := 0
 		keySet := make(map[string]struct{})
 
-		for _, c := range result.MatchedContainers {
+		scanned := result.MatchedContainers
+		if len(scanned) > previewMaxLogContainers {
+			scanned = scanned[:previewMaxLogContainers]
+		}
+		result.ScannedContainers = len(scanned)
+
+		for _, c := range scanned {
 			containerService, err := h.hostService.FindContainer(c.Host, c.ID, h.resolveLabels(r))
 			if err != nil {
 				continue
 			}
 
-			from := time.Now().Add(-2 * time.Hour)
+			from := time.Now().Add(-previewLogWindow)
 			to := time.Now()
 
 			logChan, err := containerService.LogsBetweenDates(ctx, from, to, container.STDALL)
@@ -631,12 +830,12 @@ func (h *handler) previewExpression(w http.ResponseWriter, r *http.Request) {
 
 				// Collect message keys from structured logs
 				switch m := logEvent.Message.(type) {
-				case *orderedmap.OrderedMap[string, any]:
-					for pair := m.Oldest(); pair != nil; pair = pair.Next() {
+				case container.Fields[any]:
+					for _, pair := range m {
 						keySet[pair.Key] = struct{}{}
 					}
-				case *orderedmap.OrderedMap[string, string]:
-					for pair := m.Oldest(); pair != nil; pair = pair.Next() {
+				case container.Fields[string]:
+					for _, pair := range m {
 						keySet[pair.Key] = struct{}{}
 					}
 				}
@@ -645,7 +844,11 @@ func (h *handler) previewExpression(w http.ResponseWriter, r *http.Request) {
 					notificationLog := notification.FromLogEvent(*logEvent)
 					if sub.MatchesLog(notificationLog) {
 						totalMatched++
-						if len(result.MatchedLogs) < maxLogs {
+						if len(result.MatchedLogs) < previewMaxLogs {
+							// The form renders these with the same v-html log items as the
+							// stream, so they need the same escaping. Matching above ran on
+							// the raw text.
+							search.EscapeHTMLValues(logEvent)
 							result.MatchedLogs = append(result.MatchedLogs, *logEvent)
 						}
 					}
@@ -690,30 +893,9 @@ func (h *handler) testWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mockNotification := types.Notification{
-		ID:        "test-notification",
-		Type:      types.LogNotification,
-		Detail:    "This is a test log message from Dozzle",
-		Timestamp: time.Now(),
-		Container: types.NotificationContainer{
-			ID:       "abc123",
-			Name:     "test-container",
-			Image:    "nginx:latest",
-			State:    "running",
-			Health:   "healthy",
-			HostID:   "localhost",
-			HostName: "localhost",
-			Labels:   map[string]string{"env": "test"},
-		},
-		Log: &types.NotificationLog{
-			ID:        1,
-			Message:   "This is a test log message from Dozzle",
-			Timestamp: time.Now().UnixMilli(),
-			Level:     "info",
-			Stream:    "stdout",
-			Type:      "simple",
-		},
-	}
+	mockNotification := testNotification(templateStr)
+
+	unsupported := unsupportedKinds(webhook, mockNotification.Type)
 
 	result := webhook.SendTest(r.Context(), mockNotification)
 
@@ -728,27 +910,130 @@ func (h *handler) testWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, &TestWebhookResult{
-		Success:    result.Success,
-		StatusCode: statusCode,
-		Error:      errStr,
+		Success:     result.Success,
+		StatusCode:  statusCode,
+		Error:       errStr,
+		Unsupported: unsupported,
 	})
 }
 
-// Releases handler
-var releasesCache *cache.Cache[[]releases.Release]
+// unsupportedKinds renders the template for every alert kind but sent, the one the test sends,
+// and returns those that fail. One destination serves every kind of alert but a test only sends
+// one, so without this a template that only works for log alerts fails silently the first time
+// an update or metric alert fires. See #5561.
+func unsupportedKinds(webhook *dispatcher.WebhookDispatcher, sent types.NotificationType) []string {
+	var kinds []string
+	for _, kind := range alertKinds {
+		if kind == sent {
+			continue
+		}
+		if _, err := webhook.Render(sampleNotification(kind)); err != nil {
+			kinds = append(kinds, string(kind))
+		}
+	}
+	return kinds
+}
 
-func (h *handler) getReleases(w http.ResponseWriter, r *http.Request) {
-	if releasesCache == nil {
-		releasesCache = cache.New(func() ([]releases.Release, error) {
-			return releases.Fetch(h.config.Version)
-		}, time.Hour)
+// readsEvent and readsStat match the field as a whole word, so .Container.State is not .Stat.
+var (
+	readsEvent = regexp.MustCompile(`\.Event\b`)
+	readsStat  = regexp.MustCompile(`\.Stat\b`)
+)
+
+// alertKinds is every kind of alert a destination can be sent, in the order they are reported.
+var alertKinds = []types.NotificationType{types.LogNotification, types.MetricNotification, types.EventNotification}
+
+// testNotification builds the sample a webhook test sends. A destination is not tied to one
+// kind of alert, so the sample follows the template: one that reads .Event or .Stat gets an
+// event or metric sample, since a log sample leaves those nil and the template fails to render.
+func testNotification(templateStr string) types.Notification {
+	switch {
+	case readsEvent.MatchString(templateStr):
+		return sampleNotification(types.EventNotification)
+	case readsStat.MatchString(templateStr):
+		return sampleNotification(types.MetricNotification)
+	default:
+		return sampleNotification(types.LogNotification)
+	}
+}
+
+// sampleNotification builds a test notification of one kind. Only the matching one of
+// .Log, .Stat and .Event is set, as on a real alert.
+func sampleNotification(kind types.NotificationType) types.Notification {
+	now := time.Now()
+	n := types.Notification{
+		ID:        "test-notification",
+		Timestamp: now,
+		Container: types.NotificationContainer{
+			ID:       "abc123",
+			Name:     "test-container",
+			Image:    "nginx:latest",
+			State:    "running",
+			Health:   "healthy",
+			HostID:   "localhost",
+			HostName: "localhost",
+			Labels:   map[string]string{"env": "test"},
+		},
 	}
 
-	result, err := releasesCache.Get()
+	switch kind {
+	case types.EventNotification:
+		n.Type = types.EventNotification
+		n.Detail = "This is a test event from Dozzle"
+		n.Event = &types.NotificationEvent{
+			Name:    notification.UpdateAvailableEventName,
+			ActorID: "abc123",
+			Attributes: map[string]string{
+				"image":          "nginx:latest",
+				"currentVersion": "1.27.0",
+				"latestVersion":  "1.27.1",
+				"currentDigest":  "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+				"latestDigest":   "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+			},
+			Timestamp: now,
+		}
+	case types.MetricNotification:
+		n.Type = types.MetricNotification
+		n.Detail = "This is a test metric alert from Dozzle"
+		n.Stat = &types.NotificationStat{CPUPercent: 85, MemoryPercent: 60, MemoryUsage: 512 * 1024 * 1024}
+	default:
+		n.Type = types.LogNotification
+		n.Detail = "This is a test log message from Dozzle"
+		n.Log = &types.NotificationLog{
+			ID:        1,
+			Message:   "This is a test log message from Dozzle",
+			Timestamp: now.UnixMilli(),
+			Level:     "info",
+			Stream:    "stdout",
+			Type:      "simple",
+		}
+	}
+	return n
+}
+
+// Releases handler
+func (h *handler) releases() *cache.Cache[[]releases.Release] {
+	h.releasesOnce.Do(func() {
+		h.releasesCache = cache.New(func() ([]releases.Release, error) {
+			return releases.Fetch(h.config.Version)
+		}, time.Hour)
+	})
+
+	return h.releasesCache
+}
+
+func (h *handler) getReleases(w http.ResponseWriter, r *http.Request) {
+	result, err := h.releases().Get()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, result)
+	// The notes are rendered HTML, around 100 KB, and compress about tenfold.
+	w.Header().Set("Content-Type", "application/json")
+	writer, done := compressedWriter(w, r)
+	defer done()
+	if err := json.NewEncoder(writer).Encode(result); err != nil {
+		log.Error().Err(err).Msg("error encoding releases")
+	}
 }

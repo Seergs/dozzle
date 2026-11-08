@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/amir20/dozzle/internal/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -28,6 +29,7 @@ type Settings struct {
 	ShowAllContainers bool    `json:"showAllContainers"`
 	SoftWrap          bool    `json:"softWrap"`
 	CollapseNav       bool    `json:"collapseNav"`
+	CollapseCloudRail bool    `json:"collapseCloudRail"`
 	AutomaticRedirect string  `json:"automaticRedirect"`
 	Size              string  `json:"size,omitempty"`
 	Compact           bool    `json:"compact"`
@@ -36,6 +38,19 @@ type Settings struct {
 	DateLocale        string  `json:"dateLocale,omitempty"`
 	Locale            string  `json:"locale"`
 	GroupContainers   string  `json:"groupContainers,omitempty"`
+	// Pointer with omitempty so a profile written before this setting existed
+	// stays silent instead of injecting a false that overrides the frontend's
+	// default of true.
+	HighlightErrors *bool `json:"highlightErrors,omitempty"`
+	// Pointers for the same reason as HighlightErrors: an older profile must not
+	// write a false over whatever the browser already has.
+	ShowAppIcons         *bool `json:"showAppIcons,omitempty"`
+	ShowImageUpdateAlert *bool `json:"showImageUpdateAlert,omitempty"`
+	TerminalFontSize     int   `json:"terminalFontSize,omitempty"`
+	// Pointers again: a user who unhid every column saves an empty list, and that
+	// has to survive rather than fall back to the frontend's default hidden set.
+	HiddenColumns *[]string `json:"hiddenColumns,omitempty"`
+	MovingAverage *bool     `json:"movingAverage,omitempty"`
 }
 
 type Profile struct {
@@ -45,6 +60,13 @@ type Profile struct {
 	ReleaseSeen           string    `json:"releaseSeen,omitempty"`
 	CollapsedGroups       []string  `json:"collapsedGroups"`
 	DismissedImageUpdates []string  `json:"dismissedImageUpdates,omitempty"`
+	DismissedLinkHint     bool      `json:"dismissedLinkHint,omitempty"`
+	SetupSeen             bool      `json:"setupSeen,omitempty"`
+	CloudWelcomeShown     bool      `json:"cloudWelcomeShown,omitempty"`
+	// Nanoseconds of the newest alert this user has opened the history for.
+	// Follows them across browsers, because "have I looked at this" is about
+	// the person and not the machine.
+	LastSeenAlertTs int64 `json:"lastSeenAlertTs,omitempty"`
 }
 
 var dataPath string
@@ -107,19 +129,16 @@ func save(username string, profile Profile) error {
 		return err
 	}
 
-	f, err := os.Create(filePath)
-	if err != nil {
+	if err := utils.WriteFile(filePath, func(w io.Writer) error {
+		_, err := w.Write(data)
 		return err
-	}
-	defer f.Close()
-
-	if _, err := f.Write(data); err != nil {
+	}); err != nil {
 		return err
 	}
 
 	log.Debug().Str("path", filePath).Msg("Profile saved")
 
-	return f.Sync()
+	return nil
 }
 
 func Load(username string) (Profile, error) {

@@ -30,26 +30,64 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      # The one job that still needs node. Every other script in package.json carries
+      # `bun --bun` and runs on the bun runtime, but `test` and `typecheck` do not:
+      # under --bun vitest's jsdom workers fail to start and vue-tsc reports a false
+      # TS2614, so both run on node through their shebangs.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         name: Install Node
         with:
           node-version: latest
-      - run: npm install --global corepack@latest
-      - run: corepack enable
-      - run: pnpm --version
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          node-version: latest
-          cache: "pnpm"
-          cache-dependency-path: "**/pnpm-lock.yaml"
+          bun-version-file: package.json
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: bun install --frozen-lockfile
       - name: Run Typecheck
-        run: pnpm run typecheck
+        run: bun run typecheck
       # Runs even when typecheck fails, so one job still reports both signals
       - name: Run Tests
         if: ${{ !cancelled() }}
-        run: pnpm run test -- --outputTruncateLength=500
+        run: bun run test
+
+  tailwind-lint:
+    name: Tailwind Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      # ESLint is here only for the Tailwind rules. See eslint.config.js.
+      - name: Run ESLint
+        run: bun run lint
+
+  helm-lint:
+    name: Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # helm ships on the ubuntu runner image
+      - name: Lint chart
+        run: helm lint charts/dozzle --strict
+      - name: Render with every toggle on
+        run: helm template dozzle charts/dozzle --set rbac.actions=true,rbac.nodeStats=true,ingress.enabled=true,persistence.existingClaim=data > /dev/null
+
+  docs-translations:
+    name: Docs Translations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      # There is no Crowdin or Weblate behind docs/, so an English page can change
+      # and leave four translations quietly wrong. Each translated file records the
+      # hash of the source it was written from; this fails when they diverge.
+      - name: Check translations are in sync
+        run: bun docs/scripts/check-translations.mjs
 
   go-test:
     name: Go Tests
@@ -61,8 +99,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.0"
-          check-latest: true
+          go-version-file: go.mod
       - name: Run Go Tests with Coverage
         run: make test-ci
 
@@ -76,8 +113,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.0"
-          check-latest: true
+          go-version-file: go.mod
           # This job shares a cache key with go-test (go version + go.sum hash) and
           # setup-go only writes on a miss. Staticcheck is much faster, so it always
           # won the race to populate, and its build cache has no -race artifacts in
@@ -85,10 +121,21 @@ jobs:
           cache: false
       - name: Generate dependencies
         run: make fake_assets shared_key.pem shared_cert.pem
-      - name: Stactic checker
-        uses: dominikh/staticcheck-action@9716614d4101e79b4340dd97b10e54d68234e431 # v1.4.1
-        with:
-          install-go: false
+      # staticcheck is a go.mod tool so it builds against the module's
+      # golang.org/x/tools; the release binary's older x/tools can't read
+      # newer Go export data.
+      - name: Static checker
+        run: go tool staticcheck ./...
+      - name: Check generated TypeScript types
+        run: |
+          go tool tygo generate
+          git diff --exit-code assets/types/generated
+          # tygo writes `any /* pkg.Type */` for a type from another package that
+          # tygo.yaml does not map, and typecheck cannot see through an any.
+          if grep -n 'any /\* ' assets/types/generated/*.ts; then
+            echo "::error::unmapped Go type became any; add it to type_mappings in tygo.yaml"
+            exit 1
+          fi
 
   int-test:
     name: Integration Tests
@@ -96,22 +143,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        name: Install Node
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          node-version: latest
-      - run: npm install --global corepack@latest
-      - run: corepack enable
-      - run: pnpm --version
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: latest
-          cache: "pnpm"
-          cache-dependency-path: "**/pnpm-lock.yaml"
+          bun-version-file: package.json
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: bun install --frozen-lockfile
+      # These images do not depend on the build, so fetch them while it runs
+      # instead of after. The pull outlives this step; compose skips whatever
+      # has landed by the time it starts and fetches the rest itself.
+      - name: Pull test images in the background
+        run: nohup docker compose pull --quiet playwright proxy logspam > /tmp/pull.log 2>&1 &
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        id: buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Same cache-dance as dev.yml, see the note there. Without it the go build
+      # runs on empty mounts and re-downloads and recompiles every dependency,
+      # ~70s, and any frontend change invalidates that layer because dist is
+      # copied in before it. The key is separate from dev.yml's: this job only
+      # builds amd64, and whichever job saved a shared key first would own it.
+      - name: Restore Go caches
+        id: go-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            go-build-cache
+            go-mod-cache
+          key: go-int-${{ hashFiles('go.sum') }}
+          restore-keys: go-int-
+      - name: Inject Go caches into the builder
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          cache-map: |
+            {
+              "go-build-cache": "/root/.cache/go-build",
+              "go-mod-cache": "/go/pkg/mod"
+            }
+          skip-extraction: ${{ steps.go-cache.outputs.cache-hit == 'true' }}
       - name: Generate certs
         if: ${{ !inputs.release-certs }}
         run: make shared_key.pem shared_cert.pem
@@ -121,7 +189,7 @@ jobs:
           echo "${{ secrets.TTL_KEY }}" > shared_key.pem
           echo "${{ secrets.TTL_CERT }}" > shared_cert.pem
       - name: Build
-        uses: docker/bake-action@d3418bd7d0e9324001bca92fa8ba175ea7e6dc9b # v7.3.0
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
         with:
           source: .
           load: true
@@ -130,7 +198,7 @@ jobs:
             *.cache-to=type=gha,mode=max
       - name: Run Playwright tests
         run: docker compose up --exit-code-from playwright
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: playwright-report

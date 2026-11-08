@@ -10,30 +10,31 @@ import (
 	"time"
 
 	"testing"
+	"testing/fstest"
 
 	"github.com/amir20/dozzle/internal/auth"
-	"github.com/beme/abide"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/spf13/afero"
 )
 
-func Test_createRoutes_simple_redirect(t *testing.T) {
-	fs := afero.NewMemMapFs()
-	require.NoError(t, afero.WriteFile(fs, "index.html", []byte("index page"), 0644), "WriteFile should have no error.")
+// testSecret stands in for the persisted secret from auth.SessionSecret, fixed so
+// the snapshotted responses stay stable.
+var testSecret = []byte("test-session-secret")
 
-	handler := createHandler(nil, afero.NewIOFS(fs), Config{Base: "/",
+func Test_createRoutes_simple_redirect(t *testing.T) {
+	fs := fstest.MapFS{"index.html": {Data: []byte("index page")}}
+
+	handler := createHandler(nil, fs, Config{Base: "/",
 		Authorization: Authorization{
 			Provider: SIMPLE,
 			Authorizer: auth.NewSimpleAuth(auth.UserDatabase{
 				Users: map[string]*auth.User{
 					"amir": {
 						Username: "amir",
-						Password: "$2a$10$4Tvzu0ms9shlv4B8pIfqI.TM9CoqsamsAznP91A1NGuwg/68SGS1m",
+						Password: "$2a$04$gma4F9WIu3g1ILzyj5Xvv.3sBkbmX20wDHNE.1oNw0mJvB9G.Vb0C",
 					},
 				},
-			}, time.Second*100),
+			}, time.Second*100, testSecret),
 		},
 	})
 	req, err := http.NewRequest("GET", "/", nil)
@@ -41,24 +42,23 @@ func Test_createRoutes_simple_redirect(t *testing.T) {
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
-	abide.AssertHTTPResponse(t, t.Name(), rr.Result())
+	matchHTTPSnapshot(t, rr.Result())
 }
 
 func Test_createRoutes_simple_valid_token(t *testing.T) {
-	fs := afero.NewMemMapFs()
-	require.NoError(t, afero.WriteFile(fs, "index.html", []byte("index page"), 0644), "WriteFile should have no error.")
+	fs := fstest.MapFS{"index.html": {Data: []byte("index page")}}
 
-	handler := createHandler(nil, afero.NewIOFS(fs), Config{Base: "/",
+	handler := createHandler(nil, fs, Config{Base: "/",
 		Authorization: Authorization{
 			Provider: SIMPLE,
 			Authorizer: auth.NewSimpleAuth(auth.UserDatabase{
 				Users: map[string]*auth.User{
 					"amir": {
 						Username: "amir",
-						Password: "$2a$10$4Tvzu0ms9shlv4B8pIfqI.TM9CoqsamsAznP91A1NGuwg/68SGS1m",
+						Password: "$2a$04$gma4F9WIu3g1ILzyj5Xvv.3sBkbmX20wDHNE.1oNw0mJvB9G.Vb0C",
 					},
 				},
-			}, time.Second*100),
+			}, time.Second*100, testSecret),
 		},
 	})
 
@@ -90,20 +90,19 @@ func Test_createRoutes_simple_valid_token(t *testing.T) {
 }
 
 func Test_createRoutes_simple_bad_password(t *testing.T) {
-	fs := afero.NewMemMapFs()
-	require.NoError(t, afero.WriteFile(fs, "index.html", []byte("index page"), 0644), "WriteFile should have no error.")
+	fs := fstest.MapFS{"index.html": {Data: []byte("index page")}}
 
-	handler := createHandler(nil, afero.NewIOFS(fs), Config{Base: "/",
+	handler := createHandler(nil, fs, Config{Base: "/",
 		Authorization: Authorization{
 			Provider: SIMPLE,
 			Authorizer: auth.NewSimpleAuth(auth.UserDatabase{
 				Users: map[string]*auth.User{
 					"amir": {
 						Username: "amir",
-						Password: "$2a$10$4Tvzu0ms9shlv4B8pIfqI.TM9CoqsamsAznP91A1NGuwg/68SGS1m",
+						Password: "$2a$04$gma4F9WIu3g1ILzyj5Xvv.3sBkbmX20wDHNE.1oNw0mJvB9G.Vb0C",
 					},
 				},
-			}, time.Second*100),
+			}, time.Second*100, testSecret),
 		},
 	})
 
@@ -115,9 +114,9 @@ func Test_createRoutes_simple_bad_password(t *testing.T) {
 	_, err = io.Copy(fw, strings.NewReader("amir"))
 	require.NoError(t, err, "Copying field should not result in error.")
 
-	fw, err = writer.CreateFormField("badpassword")
+	fw, err = writer.CreateFormField("password")
 	require.NoError(t, err, "Creating field should not be error.")
-	_, err = io.Copy(fw, strings.NewReader("password"))
+	_, err = io.Copy(fw, strings.NewReader("wrong-password"))
 	require.NoError(t, err, "Copying field should not result in error.")
 
 	writer.Close()
@@ -133,20 +132,19 @@ func Test_createRoutes_simple_bad_password(t *testing.T) {
 }
 
 func Test_createRoutes_simple_cloud_callback_requires_auth(t *testing.T) {
-	fs := afero.NewMemMapFs()
-	require.NoError(t, afero.WriteFile(fs, "index.html", []byte("index page"), 0644), "WriteFile should have no error.")
+	fs := fstest.MapFS{"index.html": {Data: []byte("index page")}}
 
-	handler := createHandler(nil, afero.NewIOFS(fs), Config{Base: "/",
+	handler := createHandler(nil, fs, Config{Base: "/",
 		Authorization: Authorization{
 			Provider: SIMPLE,
 			Authorizer: auth.NewSimpleAuth(auth.UserDatabase{
 				Users: map[string]*auth.User{
 					"amir": {
 						Username: "amir",
-						Password: "$2a$10$4Tvzu0ms9shlv4B8pIfqI.TM9CoqsamsAznP91A1NGuwg/68SGS1m",
+						Password: "$2a$04$gma4F9WIu3g1ILzyj5Xvv.3sBkbmX20wDHNE.1oNw0mJvB9G.Vb0C",
 					},
 				},
-			}, time.Second*100),
+			}, time.Second*100, testSecret),
 		},
 	})
 
@@ -160,4 +158,60 @@ func Test_createRoutes_simple_cloud_callback_requires_auth(t *testing.T) {
 
 		assert.Equal(t, 401, rr.Code, "%s should require authentication.", path)
 	}
+}
+
+// A back swipe after signing in lands on /login with a live session. Rendering the
+// form again would ask for credentials the browser already holds.
+func Test_createRoutes_simple_login_page_redirects_signed_in_user(t *testing.T) {
+	fs := fstest.MapFS{"index.html": {Data: []byte("index page")}}
+
+	handler := createHandler(nil, fs, Config{Base: "/",
+		Authorization: Authorization{
+			Provider: SIMPLE,
+			Authorizer: auth.NewSimpleAuth(auth.UserDatabase{
+				Users: map[string]*auth.User{
+					"amir": {
+						Username: "amir",
+						Password: "$2a$04$gma4F9WIu3g1ILzyj5Xvv.3sBkbmX20wDHNE.1oNw0mJvB9G.Vb0C",
+					},
+				},
+			}, time.Second*100, testSecret),
+		},
+	})
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	require.NoError(t, writer.WriteField("username", "amir"))
+	require.NoError(t, writer.WriteField("password", "password"))
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/api/token", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	cookies := rr.Result().Cookies()
+	require.NotEmpty(t, cookies)
+
+	get := func(target string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", target, nil)
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+
+	rr = get("/login?redirectUrl=%2Fcontainer%2Fabc")
+	assert.Equal(t, http.StatusTemporaryRedirect, rr.Code)
+	assert.Equal(t, "/container/abc", rr.Header().Get("Location"))
+
+	rr = get("/login")
+	assert.Equal(t, http.StatusTemporaryRedirect, rr.Code)
+	assert.Equal(t, "/", rr.Header().Get("Location"))
+
+	rr = get("/login?redirectUrl=%2F%2Fevil.com")
+	assert.Equal(t, http.StatusTemporaryRedirect, rr.Code)
+	assert.Equal(t, "/", rr.Header().Get("Location"))
 }

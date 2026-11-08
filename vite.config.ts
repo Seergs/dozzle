@@ -1,29 +1,47 @@
+import { statSync } from "node:fs";
 import path from "node:path";
 import { defineConfig } from "vite";
 import Vue from "@vitejs/plugin-vue";
-import VueMacros from "unplugin-vue-macros/vite";
 import Icons from "unplugin-icons/vite";
 import Components from "unplugin-vue-components/vite";
 import AutoImport from "unplugin-auto-import/vite";
 import IconsResolver from "unplugin-icons/resolver";
 import VueRouter from "vue-router/vite";
-import Layouts from "vite-plugin-vue-layouts";
+import Layouts from "vite-plugin-vue-layouts-next";
 import VueI18nPlugin from "@intlify/unplugin-vue-i18n/vite";
 import svgLoader from "vite-svg-loader";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig(() => ({
   base: "./",
+  server: {
+    // `make dev` opens the Go server's page; `make dev-auto` is mostly started by an
+    // agent in a background shell, where a browser tab popping up is just noise.
+    open: process.env.DEV_NO_OPEN ? false : `http://localhost:${process.env.DOZZLE_PORT ?? 3100}/`,
+  },
   define: {
-    __CLOUD_URL__: JSON.stringify(process.env.CLOUD_URL || "https://cloud.dozzle.dev"),
+    // No component uses the options API, so drop that half of the Vue runtime.
+    __VUE_OPTIONS_API__: false,
+    // useDuckDB's progress bar needs the decoded size; the response only carries the brotli one.
+    __DUCKDB_WASM_SIZE__: statSync(
+      path.resolve(import.meta.dirname, "node_modules/@duckdb/duckdb-wasm/dist/duckdb-eh.wasm"),
+    ).size,
   },
   resolve: {
     alias: {
       "@/": `${path.resolve(import.meta.dirname, "assets")}/`,
-      // ansi-to-html drags in the full `entities` HTML entity table (~135 KB raw). We build
-      // the converter with escapeXML: false, so only encodeXML is reachable. See the shim.
+      // markdown-it drags in the full `entities` HTML entity table (~135 KB raw) for one
+      // function, decodeHTMLStrict. See the shim.
       entities: path.resolve(import.meta.dirname, "assets/shims/entities.ts"),
     },
+  },
+  optimizeDeps: {
+    // The chat pane is loaded lazily, so vite's startup scan never sees
+    // markdown-it (and its five bare deps). It discovers them the first time
+    // someone opens the pane, re-optimizes mid-session, and the chunk that
+    // triggered it fails with "504 Outdated Optimize Dep". Naming it here means
+    // it is pre-bundled before anyone asks.
+    include: ["markdown-it"],
   },
   build: {
     manifest: true,
@@ -32,6 +50,20 @@ export default defineConfig(() => ({
     assetsInlineLimit: (filePath: string) => (filePath.includes("assets/icons/apps/") ? false : undefined),
     rollupOptions: {
       input: "assets/main.ts",
+      // Left to itself rolldown split what the first page needs into ~75 chunks, over
+      // half of them under 2 KB. Over plain HTTP/1.1 (how most installs are reached)
+      // that is six requests at a time, so the shell waited on round trips rather than
+      // bytes. Everything the entry loads up front goes into two chunks instead:
+      // dependencies, which survive a Dozzle upgrade in the browser cache, and the app.
+      // Lazy pages and drawers still split as before.
+      output: {
+        codeSplitting: {
+          groups: [
+            { name: "vendor", test: /node_modules/, tags: ["$initial" as const] },
+            { name: "app", tags: ["$initial" as const] },
+          ],
+        },
+      },
     },
     modulePreload: {
       polyfill: false,
@@ -49,11 +81,7 @@ export default defineConfig(() => ({
       // against import.meta.url, so this works under a custom base too.
       importMode: "async",
     }),
-    VueMacros({
-      plugins: {
-        vue: Vue(),
-      },
-    }),
+    Vue(),
     Icons({
       autoInstall: true,
     }),
@@ -85,7 +113,9 @@ export default defineConfig(() => ({
         "@vueuse/core",
       ],
       dts: "assets/auto-imports.d.ts",
-      dirs: ["assets/composable", "assets/stores", "assets/utils/index.ts"],
+      // Recursive: composables live in feature subfolders. A bare dir is scanned
+      // one level deep only, which silently drops everything nested.
+      dirs: ["assets/composable/**", "assets/stores", "assets/utils/index.ts"],
       vueTemplate: true,
     }),
     VueI18nPlugin({

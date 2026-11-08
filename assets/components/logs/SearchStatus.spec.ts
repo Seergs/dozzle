@@ -1,0 +1,188 @@
+import { mount } from "@vue/test-utils";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { nextTick } from "vue";
+import { createI18n } from "vue-i18n";
+import SearchStatus from "./SearchStatus.vue";
+import IndeterminateBar from "@/components/ui/IndeterminateBar.vue";
+import EmptyState from "@/components/ui/EmptyState.vue";
+import { useSearchFilter } from "@/composable/logs/search";
+
+const cloud = vi.hoisted(() => ({ available: { value: false }, open: vi.fn() }));
+vi.mock("@/composable/cloud/cloudLogSearch", async () => {
+  const { ref } = await import("vue");
+  const available = ref(false);
+  cloud.available = available;
+  return { useCloudSearchHandoff: () => ({ available, open: cloud.open }) };
+});
+
+/**
+ * @vitest-environment jsdom
+ */
+const i18n = createI18n({
+  legacy: false,
+  locale: "en",
+  messages: {
+    en: {
+      label: {
+        "search-status": {
+          searching: "Searching older logs…",
+          matches: "{count} matches",
+          "searched-all": "Searched all logs",
+          "scanned-to": "back to {time}",
+          empty: "No matching logs",
+          "empty-hint": "Searched all logs. Try a different term or clear the search.",
+        },
+      },
+    },
+  },
+});
+
+function createStatus(overrides: Record<string, unknown> = {}, empty = false) {
+  return mount(SearchStatus, {
+    global: { plugins: [i18n] },
+    props: {
+      status: { active: false, done: false, matches: 0, scannedTo: undefined, reason: undefined, ...overrides },
+      empty,
+    },
+  });
+}
+
+describe("<SearchStatus />", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    cloud.available.value = false;
+    cloud.open.mockReset();
+    useSearchFilter().resetSearch();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("stays hidden while a search is active but still fast (flash avoidance)", async () => {
+    const wrapper = createStatus({ active: true });
+    vi.advanceTimersByTime(100);
+    await nextTick();
+    expect(wrapper.find("[data-state]").exists()).toBe(false);
+  });
+
+  test("shows searching state once a search runs past the reveal delay", async () => {
+    const wrapper = createStatus({ active: true });
+    vi.advanceTimersByTime(400);
+    await nextTick();
+    expect(wrapper.find('[data-state="searching"]').exists()).toBe(true);
+    expect(wrapper.findComponent(IndeterminateBar).exists()).toBe(true);
+  });
+
+  test("takes the whole page while a search runs with nothing on screen yet", async () => {
+    const wrapper = createStatus({ active: true, scannedTo: "2026-06-01T13:10:00Z" }, true);
+    vi.advanceTimersByTime(400);
+    await nextTick();
+    // The centred state, not the strip: EmptyState owns the layout.
+    expect(wrapper.findComponent(EmptyState).exists()).toBe(true);
+    expect(wrapper.find('[data-state="searching"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain("Searching older logs…");
+  });
+
+  test("reveals the searching bar even when progress events arrive faster than the delay", async () => {
+    const wrapper = createStatus({ active: true });
+    // a slow search emits a progress event each window; the reveal delay must
+    // measure from when the search started, not restart on every event
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(100);
+      await wrapper.setProps({ status: { active: true, done: false, matches: i, scannedTo: `t${i}` } });
+      await nextTick();
+    }
+    expect(wrapper.find('[data-state="searching"]').exists()).toBe(true);
+  });
+
+  test("shows the empty state when a search finishes with no matches", async () => {
+    const wrapper = createStatus({ active: false, done: true, matches: 0, reason: "exhausted" });
+    await nextTick();
+    expect(wrapper.find('[data-state="empty"]').exists()).toBe(true);
+  });
+
+  test("shows a completion summary for a slow exhausted search", async () => {
+    const wrapper = createStatus({ active: true });
+    vi.advanceTimersByTime(400);
+    await nextTick();
+    await wrapper.setProps({ status: { active: false, done: true, matches: 3, reason: "exhausted" } });
+    await nextTick();
+    expect(wrapper.find('[data-state="exhausted"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain("3");
+  });
+
+  test("shows a capped summary for a slow capped search", async () => {
+    const wrapper = createStatus({ active: true });
+    vi.advanceTimersByTime(400);
+    await nextTick();
+    await wrapper.setProps({
+      status: { active: false, done: true, matches: 50, reason: "capped", scannedTo: "2026-06-01T13:10:00Z" },
+    });
+    await nextTick();
+    expect(wrapper.find('[data-state="capped"]').exists()).toBe(true);
+  });
+
+  test("stays quiet for a fast search that returned matches", async () => {
+    const wrapper = createStatus({ active: true });
+    vi.advanceTimersByTime(100);
+    await nextTick();
+    await wrapper.setProps({ status: { active: false, done: true, matches: 5, reason: "capped" } });
+    await nextTick();
+    expect(wrapper.find("[data-state]").exists()).toBe(false);
+  });
+
+  test("shows how much of the older logs has been read while searching", async () => {
+    const wrapper = createStatus({ active: true, matches: 2, progress: 0.42 });
+    vi.advanceTimersByTime(400);
+    await nextTick();
+    expect(wrapper.find('[data-state="searching"]').text()).toContain("42%");
+    expect(wrapper.text()).toContain("2 matches");
+  });
+
+  test("shows the percentage on the full-page searching state too", async () => {
+    const wrapper = createStatus({ active: true, progress: 0.07 }, true);
+    vi.advanceTimersByTime(400);
+    await nextTick();
+    expect(wrapper.findComponent(EmptyState).text()).toContain("7%");
+  });
+
+  test("shows no percentage before the long read starts", async () => {
+    const wrapper = createStatus({ active: true, scannedTo: "2026-06-01T13:10:00Z" });
+    vi.advanceTimersByTime(400);
+    await nextTick();
+    expect(wrapper.text()).not.toContain("%");
+    expect(wrapper.text()).not.toContain("back to");
+  });
+
+  test("offers cloud search on an empty result only when cloud can search", async () => {
+    useSearchFilter().searchQueryFilter.value = "timeout";
+    const done = { active: false, done: true, matches: 0 };
+
+    let wrapper = createStatus(done);
+    await nextTick();
+    expect(wrapper.find('[data-testid="search-cloud"]').exists()).toBe(false);
+
+    cloud.available.value = true;
+    wrapper = createStatus(done);
+    await nextTick();
+    await wrapper.find('[data-testid="search-cloud"]').trigger("click");
+    expect(cloud.open).toHaveBeenCalledWith("timeout", { regex: true });
+  });
+
+  test("hides the cloud action for an inverse or broken pattern", async () => {
+    cloud.available.value = true;
+    const done = { active: false, done: true, matches: 0 };
+    const search = useSearchFilter();
+
+    search.searchQueryFilter.value = "error[";
+    let wrapper = createStatus(done);
+    await nextTick();
+    expect(wrapper.find('[data-testid="search-cloud"]').exists()).toBe(false);
+
+    search.searchQueryFilter.value = "error";
+    search.inverseFilter.value = true;
+    wrapper = createStatus(done);
+    await nextTick();
+    expect(wrapper.find('[data-testid="search-cloud"]').exists()).toBe(false);
+  });
+});

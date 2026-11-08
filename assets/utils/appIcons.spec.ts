@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { hasIcon, iconSlugForImage, iconUrl } from "./appIcons";
+import { hasIcon, iconSlugForImage, iconUrl, isDataIcon, MAX_DATA_ICON_LENGTH } from "./appIcons";
 
 describe("iconSlugForImage", () => {
   test.each([
@@ -9,12 +9,39 @@ describe("iconSlugForImage", () => {
     ["lscr.io/linuxserver/prowlarr:latest", "prowlarr"],
     ["ghcr.io/hotio/bazarr", "bazarr"],
     ["ghcr.io/hotio/qbittorrent:release-4.6.5", "qbittorrent"],
+    ["lukevella/rallly:4", "rallly"],
     ["jc21/nginx-proxy-manager:2.11.3", "nginx-proxy-manager"],
+    ["zoeyvid/npmplus:latest", "nginx-proxy-manager"],
     ["ghcr.io/gethomepage/homepage", "homepage"],
     ["amir20/dozzle:v8", "dozzle"],
     ["homebridge/homebridge:latest", "homebridge"],
     ["santiagosayshey/profilarr:latest", "profilarr"],
     ["ghcr.io/seerr/seerr", "seerr"],
+    ["ghcr.io/bluesky-social/pds:0.4.67", "bluesky"],
+    ["tootsuite/mastodon:v4.7.2", "mastodon"],
+    ["lscr.io/linuxserver/apprise-api:latest", "apprise"],
+    ["litespeedtech/openlitespeed:latest", "litespeed"],
+    ["openrct2/openrct2-cli:develop", "openrct2"],
+    ["thetorproject/snowflake-proxy:latest", "tor"],
+    ["thetorproject/webtunnel-bridge:latest", "tor"],
+    ["public.ecr.aws/zinclabs/openobserve:latest", "open-observe"],
+    ["instantlinux/nut-upsd:latest", "nut"],
+    ["cglatot/pasta:latest", "pastatool"],
+    ["cr.fluentbit.io/fluent/fluent-bit:3.2", "fluent-bit"],
+    ["ghcr.io/browserless/chromium:latest", "browserless"],
+    ["ghcr.io/jokob-sk/netalertx:latest", "netalertx"],
+    ["gcr.io/datadoghq/agent:7", "datadog"],
+    ["datadog/agent:latest", "datadog"],
+    ["ghcr.io/mhsanaei/3x-ui:latest", "xray"],
+    ["ghcr.io/usetrmnl/larapaper:latest", "trmnl"],
+    ["ayufan/proxmox-backup-server:v4", "proxmox"],
+    ["apache/airflow:latest", "apache-airflow"],
+    ["ubuntu:24.04", "ubuntu-linux"],
+    ["cthulhoo/ttrss-fpm-pgsql-static:latest", "tinytinyrss"],
+    ["cthulhoo/ttrss-web-nginx", "tinytinyrss"],
+    ["wangqiru/ttrss", "tinytinyrss"],
+    ["ghcr.io/tt-rss/tt-rss:latest", "tinytinyrss"],
+    ["ghcr.io/tt-rss/tt-rss-web-nginx:latest", "tinytinyrss"],
   ])("resolves %s", (image, slug) => {
     expect(iconSlugForImage(image)).toBe(slug);
   });
@@ -38,6 +65,9 @@ describe("iconSlugForImage", () => {
     expect(iconSlugForImage("eclipse-mosquitto")).toBe("mosquitto");
     expect(iconSlugForImage("pihole/pihole")).toBe("pi-hole");
     expect(iconSlugForImage("ghcr.io/immich-app/immich-server:v1.106.4")).toBe("immich");
+    expect(iconSlugForImage("ghcr.io/coollabsio/coolify-helper:1.0.12")).toBe("coolify");
+    expect(iconSlugForImage("henrygd/beszel-agent:latest")).toBe("beszel");
+    expect(iconSlugForImage("ghcr.io/nextcloud-releases/aio-nextcloud:latest")).toBe("nextcloud");
   });
 
   test("strips deployment suffixes", () => {
@@ -77,6 +107,35 @@ describe("iconUrl", () => {
   test("returns undefined without a slug", () => {
     expect(iconUrl(undefined, true)).toBeUndefined();
     expect(iconUrl("definitely-not-bundled", true)).toBeUndefined();
+  });
+});
+
+describe("isDataIcon", () => {
+  test("accepts svg, png and webp", () => {
+    expect(isDataIcon("data:image/svg+xml;base64,PHN2Zy8+")).toBe(true);
+    expect(isDataIcon("data:image/svg+xml,%3Csvg/%3E")).toBe(true);
+    expect(isDataIcon("data:image/png;base64,iVBORw0KGgo=")).toBe(true);
+    expect(isDataIcon("data:image/webp;base64,UklGRg==")).toBe(true);
+  });
+
+  test("rejects everything else", () => {
+    expect(isDataIcon("plex")).toBe(false);
+    expect(isDataIcon("https://example.com/icon.svg")).toBe(false);
+    expect(isDataIcon("data:text/html;base64,PHNjcmlwdD4=")).toBe(false);
+    expect(isDataIcon("data:image/gif;base64,R0lGODlh")).toBe(false);
+    expect(isDataIcon("data:image/pngx;base64,AAAA")).toBe(false);
+  });
+
+  test("rejects an icon over the size cap", () => {
+    const prefix = "data:image/png;base64,";
+    expect(isDataIcon(prefix + "A".repeat(MAX_DATA_ICON_LENGTH - prefix.length))).toBe(true);
+    expect(isDataIcon(prefix + "A".repeat(MAX_DATA_ICON_LENGTH))).toBe(false);
+  });
+
+  test("iconUrl hands a data URI straight back", () => {
+    const icon = "data:image/png;base64,iVBORw0KGgo=";
+    expect(iconUrl(icon, true)).toBe(icon);
+    expect(iconUrl(icon, false)).toBe(icon);
   });
 });
 

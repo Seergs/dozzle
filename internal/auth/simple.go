@@ -18,6 +18,7 @@ type simpleAuthContext struct {
 	UserDatabase UserDatabase
 	tokenAuth    *jwtauth.JWTAuth
 	ttl          time.Duration
+	secret       []byte
 	// UserDatabase.Find reloads users.yml in place, and the middleware now calls it
 	// on every request, so the reload has to be serialized.
 	mu sync.Mutex
@@ -25,16 +26,30 @@ type simpleAuthContext struct {
 
 var ErrInvalidCredentials = errors.New("invalid credentials")
 
-func NewSimpleAuth(userDatabase UserDatabase, ttl time.Duration) *simpleAuthContext {
+// NewSimpleAuth builds the simple auth context. secret is the persisted random
+// key from SessionSecret; it is what the signing key's entropy comes from.
+func NewSimpleAuth(userDatabase UserDatabase, ttl time.Duration, secret []byte) *simpleAuthContext {
+	// The users are hashed on top of the secret rather than instead of it. On
+	// their own they are not secret at all: an OAuth-only account has no password
+	// hash, leaving a digest over a role name, an email and a GitHub login that
+	// anyone who can guess them can reproduce and sign tokens with.
+	//
 	// Hash the users in a stable order. Ranging over the map directly makes the
 	// digest depend on Go's randomized map iteration order, so any users.yml with
 	// more than one user derives a different signing key on every start and
 	// silently invalidates every session on restart.
+	//
+	// The linked OAuth accounts are part of the digest for the same reason the
+	// password is: repointing a user at a different GitHub login has to rotate
+	// sessions, or the sessions minted under the old link outlive it.
 	h := sha256.New()
+	h.Write(secret)
 	for _, username := range slices.Sorted(maps.Keys(userDatabase.Users)) {
 		user := userDatabase.Users[username]
 		h.Write([]byte(user.Password))
 		h.Write([]byte(user.RolesConfigured))
+		h.Write([]byte(user.Email))
+		h.Write([]byte(user.Github))
 	}
 
 	tokenAuth := jwtauth.New("HS256", h.Sum(nil), nil)
@@ -43,6 +58,7 @@ func NewSimpleAuth(userDatabase UserDatabase, ttl time.Duration) *simpleAuthCont
 		UserDatabase: userDatabase,
 		tokenAuth:    tokenAuth,
 		ttl:          ttl,
+		secret:       secret,
 	}
 }
 
@@ -61,12 +77,59 @@ func (a *simpleAuthContext) find(username string) (User, bool) {
 	return *user, true
 }
 
+// PasswordLoginEnabled reports whether the password form can succeed for anyone.
+// When it cannot, the login page drops the username and password fields instead
+// of offering a form with no possible answer.
+func (a *simpleAuthContext) PasswordLoginEnabled() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return a.UserDatabase.AnyPassword()
+}
+
+// findByGithub resolves a GitHub login to a user, by value and under the same
+// lock as find, so the users.yml reload cannot race the read.
+func (a *simpleAuthContext) findByGithub(login string) (User, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	user := a.UserDatabase.FindByGithub(login)
+	if user == nil {
+		return User{}, false
+	}
+
+	return *user, true
+}
+
+// findByEmail is findByGithub for a verified email address.
+func (a *simpleAuthContext) findByEmail(email string) (User, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	user := a.UserDatabase.FindByEmail(email)
+	if user == nil {
+		return User{}, false
+	}
+
+	return *user, true
+}
+
 func (a *simpleAuthContext) CreateToken(username, password string) (string, error) {
 	user, ok := a.find(username)
-	if !ok || !CompareHashAndPassword(user.Password, password) {
+	// An account linked only to an OAuth provider carries no hash to compare,
+	// and CompareHashAndPassword would log a bogus "invalid hash length" for
+	// every attempt against one.
+	if !ok || user.Password == "" || !CompareHashAndPassword(user.Password, password) {
 		return "", ErrInvalidCredentials
 	}
 
+	return a.issueToken(user)
+}
+
+// issueToken mints the session JWT. Password login and the OAuth callback both
+// land here, so a session is indistinguishable however the user proved who they
+// are, and everything downstream of the token stays untouched.
+func (a *simpleAuthContext) issueToken(user User) (string, error) {
 	// Identity only. Everything else about the user is read from users.yml per
 	// request, so anything baked in here would just be a copy that goes stale.
 	claims := map[string]any{"username": user.Username}
@@ -84,6 +147,12 @@ func (a *simpleAuthContext) CreateToken(username, password string) (string, erro
 	return tokenString, nil
 }
 
+// TTL is the configured session lifetime, exposed so the OAuth callback can set
+// the same cookie expiry the password path does.
+func (a *simpleAuthContext) TTL() time.Duration {
+	return a.ttl
+}
+
 func (a *simpleAuthContext) AuthMiddleware(next http.Handler) http.Handler {
 	return jwtauth.Verifier(a.tokenAuth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The roles claim is a bitmask frozen at login, so it goes stale the moment
@@ -93,6 +162,7 @@ func (a *simpleAuthContext) AuthMiddleware(next http.Handler) http.Handler {
 		// users.yml. Resolve both from the database per request and let the token
 		// prove only who the user is.
 		if user := a.userFromToken(r.Context()); user != nil {
+			a.slideSession(w, r, *user)
 			r = r.WithContext(WithUser(r.Context(), *user))
 		}
 
@@ -100,15 +170,60 @@ func (a *simpleAuthContext) AuthMiddleware(next http.Handler) http.Handler {
 	}))
 }
 
-// userFromToken resolves the verified token's subject against users.yml. It returns
-// nil for a missing or invalid token, and for a user who is no longer configured, so
-// the request falls through to RequireAuthentication as unauthenticated.
+// slideSession re-issues the session once it is more than halfway through its
+// life, so an instance in regular use never reaches the TTL at all.
+//
+// Without it the token minted at login is the only one there ever is: with
+// --auth-ttl=12h a phone parked on the log view is signed out twelve hours
+// after the password was typed, however much it was used in between, and
+// nothing renews it short of visiting the login page.
+//
+// Half is what keeps the write rare. Re-signing on every request would put a
+// Set-Cookie on every SSE response and every poll for no gain, while half a TTL
+// is already a longer gap between visits than a session worth keeping alive
+// would ever have.
+func (a *simpleAuthContext) slideSession(w http.ResponseWriter, r *http.Request, user User) {
+	// ttl 0 is --auth-ttl=session: no exp claim to move, and the cookie already
+	// lives exactly as long as the browser says it does.
+	if a.ttl <= 0 {
+		return
+	}
+
+	token, _, err := jwtauth.FromContext(r.Context())
+	if err != nil || token == nil {
+		return
+	}
+
+	expiry, ok := token.Expiration()
+	if !ok || time.Until(expiry) > a.ttl/2 {
+		return
+	}
+
+	fresh, err := a.issueToken(user)
+	if err != nil {
+		// The session the caller already holds is still valid, so this is not
+		// worth failing the request over; it just expires on the old schedule.
+		log.Warn().Err(err).Str("user", user.Username).Msg("Could not renew the session token")
+		return
+	}
+
+	SetSessionCookie(w, r, fresh, a.ttl)
+}
+
+// userFromToken resolves the verified session against users.yml. It returns nil
+// for a missing or invalid token, for a token that is not a session, and for a
+// user who is no longer configured, so the request falls through to
+// RequireAuthentication as unauthenticated.
 func (a *simpleAuthContext) userFromToken(ctx context.Context) *User {
 	_, claims, err := jwtauth.FromContext(ctx)
-	if err != nil {
+	if err != nil || !isSessionClaims(claims) {
 		return nil
 	}
 
+	return a.UserFromClaims(claims)
+}
+
+func (a *simpleAuthContext) UserFromClaims(claims map[string]any) *User {
 	username, ok := claims["username"].(string)
 	if !ok || username == "" {
 		return nil
@@ -123,4 +238,17 @@ func (a *simpleAuthContext) userFromToken(ctx context.Context) *User {
 	user.Password = ""
 
 	return &user
+}
+
+func (a *simpleAuthContext) SignToken(claims map[string]any) (string, error) {
+	_, token, err := a.tokenAuth.Encode(claims)
+	return token, err
+}
+
+func (a *simpleAuthContext) VerifyToken(token string) (map[string]any, error) {
+	return verifyClaims(a.tokenAuth, token)
+}
+
+func (a *simpleAuthContext) DerivedKey(purpose string) []byte {
+	return deriveKey(a.secret, purpose)
 }

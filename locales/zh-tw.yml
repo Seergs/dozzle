@@ -5,39 +5,101 @@ toolbar:
   search: 搜尋
   inverse-on: 排除符合項目（反向）
   inverse-off: 包含符合項目（一般）
+  invalid-regex: 無效的正規表示式
+  close-search: 關閉搜尋
+  move-search: 拖曳以移動
+  search-all-containers: 搜尋所有容器
   show: 僅顯示 {std}
   show-all: 顯示全部
   stop: 停止
   start: 啟動
   restart: 重新啟動
+  rollout-restart: "重新啟動 {kind}"
+  rollout-restart-done: "{workload} 正在滾動部署新的 Pod。"
+  section-containers: "容器"
+  restart-all: "全部重新啟動"
+  stop-all: "全部停止"
+  start-all: "全部啟動"
+  bulk-confirm-restart: "要重新啟動 1 個容器嗎？ | 要重新啟動 {count} 個容器嗎？"
+  bulk-confirm-stop: "要停止 1 個容器嗎？ | 要停止 {count} 個容器嗎？"
+  bulk-confirm-start: "要啟動 1 個容器嗎？ | 要啟動 {count} 個容器嗎？"
+  bulk-self-skipped: "會略過 Dozzle 本身的容器。"
+  bulk-more: "還有 {count} 個"
+  bulk-failed: "未完成：{names}"
   update: 更新
   update-service: 更新服務
   update-pulling: 正在拉取最新映像檔...
   update-recreating: 正在重新建立容器...
+  update-verifying: 正在確認新容器持續執行...
+  update-rolled-back: 新容器未能持續執行，已還原先前的容器。
   update-done: 容器更新成功
   update-up-to-date: 已是最新版本
-  update-available: '有可用更新'
-  check-for-updates: '檢查更新'
-  checking-for-updates: '正在檢查更新...'
-  no-updates: '沒有更新'
-  dismiss-update: '忽略此更新'
-  view-release-notes: '查看發行說明'
+  update-available: "有可用更新"
+  check-for-updates: "檢查更新"
+  checking-for-updates: "正在檢查更新..."
+  no-updates: "沒有更新"
+  dismiss-update: "忽略此更新"
+  view-release-notes: "查看發行說明"
   show-hostname: 顯示主機名稱
   show-container-name: 顯示容器名稱
   shell: 終端機
   attach: 附加
+  inspect: "檢查"
   copy-permalink: 複製永久連結
   copy-image: "複製映像標籤"
+  image-version: "{image} 目前是 {version}"
+  pin: "置頂"
+  unpin: "取消置頂"
   copy-logs: 複製日誌
   copy-filtered-logs: 複製篩選日誌
   copying-logs: 正在複製日誌...
+  streams: 輸出串流
+  levels: 級別
+  toggle-all-levels: 切換所有級別
+  all: 全部
+  none: 無
+  section-logs: 日誌
+  section-filters: 篩選
+  section-display: 顯示
+  section-export: 匯出
+  section-container: 容器
+  section-image: 映像
+  section-workload: "工作負載"
 action:
   copy-log: 複製日誌
   copy-link: 複製永久連結
   see-in-context: 在內容中查看
+  search-similar: 搜尋相似日誌
   show-details: 顯示詳細資訊
   create-alert: 建立警報
+  ask-about-log: 詢問這則日誌
+log-details:
+  on-std: 來自 {std}
+  image: 映像檔
+  raw-json: 原始 JSON
+  copy: 複製
+  download: 下載 JSON
+  fields: 欄位
+  field: 欄位
+  value: 值
+  fields-hint: 拖曳可重新排序。切換可在日誌串流中顯示或隱藏。
+  chart-field: "在 SQL 分析中以圖表顯示 {field}"
+  toggle-all: 切換所有欄位
+  toggle-field: 在日誌串流中顯示或隱藏
+  memory-title: "此容器的新模式"
+  memory-explain: "Dozzle Cloud 之前未在此容器上見過此模式。僅在數字、ID 或位址上不同的行會視為同一模式。"
+  memory-pattern: "模式"
+  memory-first-seen: "首次出現"
+  memory-first-seen-now: "就是這一行"
+  memory-last-hour: "過去一小時"
+  memory-lines: "無 | 1 行 | {count} 行"
 label:
+  hide-sidebar: "隱藏側邊欄"
+  show-sidebar: "顯示側邊欄"
+  host-unreachable: "無法連線"
+  agent-unreachable: "無法連線至位於 {endpoint} 的代理程式"
+  agent-outdated: "代理程式 {version}"
+  historical-at: "歷史日誌 · {time}"
   containers: 容器
   container: 無容器 | 1 個容器 | {count} 個容器
   alert-events: 無事件 | 1 個事件 | {count} 個事件
@@ -50,6 +112,7 @@ label:
   event-suppressed-hint: Dozzle Cloud 比對到這一行，但攔下了警示
   event-metric: 指標
   event-container: 容器
+  memory-new: "新"
   host-count: 無主機 | 1 個主機 | {count} 個主機
   service: 無服務 | 1 個服務 | {count} 個服務
   services: 服務
@@ -57,31 +120,50 @@ label:
   all-containers: 所有容器
   all-namespaces: 所有命名空間
   namespaces: 命名空間
+  owners: 所屬工作負載
   no-logs: 容器尚無日誌
+  no-logs-hint: "容器輸出的內容會立即顯示在這裡。"
   search-status:
     searching: 正在搜尋較舊的日誌…
-    searching-to: 正在搜尋較舊的日誌…回溯至 {time}
-    capped: "{count} 筆符合 · 已搜尋至 {time}"
-    exhausted: 已搜尋所有日誌 · {count} 筆符合
-    empty: 無符合項目 · 已搜尋所有日誌
+    matches: "{count} 筆符合"
+    searched-all: "已搜尋所有日誌"
+    scanned-to: "回溯至 {time}"
+    empty: "沒有符合的日誌"
+    empty-hint: "已搜尋所有日誌。請試試其他關鍵字或清除搜尋。"
   show-all-containers: 顯示所有容器
   collapse-all: 摺疊全部
   collapse-group: 摺疊群組
   expand-all: 展開全部
+  more-options: 更多選項
+  groups: 群組
   host: 主機
   hosts: 主機
   password: 密碼
   username: 使用者名稱
+  or: 或
   container-name: 容器名稱
   status: 狀態
   created: 建立時間
-  avg-cpu: 平均 CPU 使用率 (%)
-  avg-mem: 平均記憶體使用率 (%)
+  avg-cpu: 平均 CPU
+  avg-mem: 平均記憶體
   name: 名稱
   cpu: CPU
+  core: 無核心 | 1 個核心 | {count} 個核心
+  disk: 磁碟
+  disk-io: 磁碟 I/O
+  network: 網路
+  reclaimable: 可回收
+  unused-images: "未使用的映像"
+  unused-volumes: "未使用的磁碟區"
+  stopped-containers: "已停止的容器"
+  build-cache: "建置快取"
+  load: 負載
+  uptime: 運作時間
   mem: MEM
   pinned: 已釘選
   per-page: 每頁列數
+  columns: 欄位
+  moving-average: 使用移動平均
   sort-by: 排序方式
   sort-direction: 切換排序方向
   host-menu: 主機和容器
@@ -89,29 +171,63 @@ label:
   k8s-menu: Kubernetes
   group-menu: 自訂群組
 tooltip:
+  memory-new: "Dozzle Cloud 之前未在此容器上看過此錯誤。點擊以在上下文中查看。"
+  memory-new-since: "首次在此容器上出現：{time}。點擊查看它從哪裡開始。"
+  live-logs: 這些日誌已凍結在該時間點。點擊以查看即時日誌串流。
   search: 搜尋容器 (⌘ + k, ⌃k)
   pin-column: 釘選為欄位
+  unpin-column: 取消釘選欄位
+  merge-stream: 合併到串流
+  merge-stream-hint: 開啟一個容器以進行合併
+  unmerge-stream: 從串流移除
   merge-all: 將所有內容合併到一個流中
   network-io: "網路：↑ {tx}/s · ↓ {rx}/s"
   disk-io: "磁碟：↑ {write}/s · ↓ {read}/s"
   cpu-usage: "CPU {cpu}% / {cores} 核心"
   memory-usage: "記憶體 {used} / {total}"
+  disk-layer: "可寫層：{size}"
+  disk-volume-shared: "{name}：{size}（由 {count} 個容器共用）"
+  reclaimable-source: "與 {command} 回報的總數相同。"
   volumes: 卷
   volume-unreachable: 無法從此主機存取
   volume-full: "{destination} 已使用 {pct}"
+  open-container-url: "開啟 {url}"
+  agent-version: "Dozzle 代理程式 {version}"
+  agent-version-mismatch: "代理程式 {version} 與 Dozzle {current} 版本不同，請在兩邊執行相同版本。"
+popup:
+  group: 群組
+  ports: 連接埠
+container-status:
+  up: "已運作 {duration}"
+  paused: "已暫停，運作 {duration}"
+  restarting: "重新啟動中，{time}停止"
+  exited: "{time}已結束"
+hint:
+  learn-more: 瞭解更多
+  dismiss: 不再顯示
+link-hint:
+  title: 連結此容器
+  description: 加入 dev.dozzle.url 標籤後，Dozzle 會顯示指向容器自身 Web 介面的連結。將以下內容加入 compose 檔案並重新啟動容器。
+  copy: 複製
 error:
   page-not-found: 此頁面不存在
   host-group-not-found: "在群組「{name}」中找不到主機"
   invalid-auth: 使用者名稱或密碼不正確
+  oauth-failed: 登入失敗，請再試一次。
   copy-not-supported: 您的瀏覽器不支援複製到剪貼簿
-  copy-not-supported-hint: 剪貼簿不可用。請複製下方連結
+  copy-insecure: http 下剪貼簿被封鎖
+  copy-insecure-hint: 瀏覽器僅允許透過 https 存取剪貼簿。請手動複製文字。
   logs-skipped: 顯示 {total} 個隱藏項目
   container-not-found: 找不到容器
+  container-not-found-hint: 它可能已被移除，或其主機已無法連線。
+  nothing-running: "這裡沒有執行中的容器"
+  nothing-running-hint: "此檢視中的容器都沒有在執行。只要有一個啟動，日誌就會顯示在這裡。"
   action-failed: 操作失敗
   update-failed: 更新失敗
   unable-to-complete-action: 無法完成操作
   invalid-action: 無效的操作
   unable-to-update: 無法更新容器
+  start-container-first: 請先啟動容器
   something-went-wrong: 發生錯誤
   unknown-error: 未知錯誤
   events-stream:
@@ -125,10 +241,9 @@ error:
       Dozzle UI 連線至 API 時逾時。請檢查網路連線後再試一次。
 alert:
   image-update:
-    title: '有可用更新'
-    message: '{image} 已發布更新的映像檔。'
+    title: "有可用更新"
+    message: "{image} 已發布更新的映像檔。"
     enable-actions: '<a href="https://dozzle.dev/guide/actions" target="_blank" rel="noreferrer noopener">啟用操作</a>即可在此拉取並重建容器。'
-    self: 'Dozzle 無法更新自身，請重新啟動以套用更新。'
   redirected:
     title: 已重新導向至新容器
     message: Dozzle 已自動將您重新導向至新容器 {containerId}。
@@ -148,8 +263,11 @@ title:
   settings: 設定
   notifications: 通知
 button:
+  back-to-dashboard: 返回儀表板
+  live-logs: 前往即時日誌
   logout: 登出
   login: 登入
+  login-with: 使用 {provider} 繼續
   settings: 設定
   cancel: 取消
   redirect: 重新導向
@@ -157,53 +275,64 @@ button:
   refresh: 重新整理
 placeholder:
   search-containers: 搜尋容器 (⌘ + k, ⌃k)
+  find-logs: 在日誌中尋找或正規表示式
   search: 搜尋
 settings:
-  show-image-update-alert: '當容器有更新時顯示通知'
-  show-image-update-alert-desc: '檢查登錄檔中是否有執行中映像的較新標籤。'
-  help-support: >
-    請透過在 GitHub 上捐款或贊助我們來支持 Dozzle。您的貢獻幫助我們為所有人改進 Dozzle。謝謝！ 🙏🏼
-  about-desc: 關於您的 Dozzle 安裝以及如何支持本專案的資訊。
-  display-desc: 自訂日誌和應用程式其餘部分的外觀。預覽會即時反映您的變更。
-  options-desc: 語言、導覽和群組偏好設定。
-  cloud-desc: 將日誌串流至 Dozzle Cloud，進行 AI 驅動的調查和跨實例搜尋。
-  support-title: 支持 Dozzle
-  support-help: 捐款有助於維持 Dozzle 免費並持續維護。謝謝 🙏
-  display: 顯示
-  locale: 變更語言
-  locale-desc: '預設沿用瀏覽器的語言。'
-  small-scrollbars: 使用較小的捲軸
-  small-scrollbars-desc: '較細的捲軸，在小螢幕上很實用。'
-  show-timestamps: 顯示時間戳記
-  show-timestamps-desc: '在每一行前面加上寫入時間。'
-  soft-wrap: 自動換行
-  soft-wrap-desc: '自動換行顯示長行，而非左右捲動。'
-  datetime-format: 變更日期與時間格式
-  datetime-format-desc: '預設沿用瀏覽器的語言與時間格式。'
-  font-size: 日誌字型大小
-  font-size-desc: '僅套用於日誌輸出，不影響應用程式其他部分。'
-  color-scheme: 顏色設定
-  color-scheme-desc: '自動會跟隨系統設定。'
-  options: 選項
-  show-stopped-containers: 顯示已停止的容器
-  show-stopped-containers-desc: '在側邊欄與清單中顯示已停止的容器。'
-  group-containers: 依命名空間分組容器
-  group-containers-desc: '依 Compose 專案、Swarm 堆疊或 dev.dozzle.group 分組。'
-  show-app-icons: '顯示應用程式圖示'
-  show-app-icons-desc: '將常見映像對應到其標誌。圖示隨 Dozzle 一起提供，不會從網際網路下載。'
+  subtitle: 此瀏覽器的偏好設定。變更會自動儲存。
+  subtitle-server: "這個 Dozzle 的設定，所有使用者共用。"
+  appearance: 外觀
+  logs: 日誌
+  sidebar: 側邊欄
+  behavior: 行為
+  advanced: 進階
   about: 關於
-  search: 啟用 Dozzle 搜尋功能
-  search-desc: '在目前檢視的容器日誌中搜尋。'
-  using-version: 您目前使用的是 <a href="https://dozzle.dev/" target="_blank" rel="noreferrer noopener">Dozzle</a> {version}。
-  update-available: >-
-    有新版本可用！請更新至 <a href="{href}" target="_blank"
-    rel="noreferrer noopener">{nextVersion}</a>。
+  general: 一般
+  updates: 更新
+  security: "安全性"
+  hosts: "主機"
+  login-desc: "誰可以開啟 Dozzle。沒有登入時，任何能連到它的人都能讀取你的日誌。"
+  login-off: "未啟用登入"
+  login-docs: "驗證指南"
+  set-by-flags: "在此模式下透過參數或環境變數設定。"
+  hosts-found: "在此模式下 Dozzle 會自行找到這些主機。"
+  after-restart: "重新啟動後生效"
+  restart-pending: "1 項變更在重新啟動後生效 | {count} 項變更在重新啟動後生效"
+  run-setup: "重新執行設定"
+  run-setup-desc: "依序引導登入、操作、主機、Dozzle Cloud 和更新。其中所有內容也都在設定中。"
+  reset: 重設為預設值
+  sponsor: 贊助
+  new-version: "{version} 已推出"
+  update-available: "有更新的映像檔可用"
+  auto-update-on: "Dozzle 會自行保持最新版本"
+  show-image-update-alert: "映像更新提醒"
+  show-image-update-alert-desc: "當執行中的映像有較新的標籤時通知。"
+  cloud-desc: 將日誌串流至 Dozzle Cloud，進行 AI 驅動的調查和跨實例搜尋。
+  locale: 語言
+  small-scrollbars: 細捲軸
+  small-scrollbars-desc: "較細的捲軸，在小螢幕上很實用。"
+  show-timestamps: 顯示時間戳記
+  show-timestamps-desc: "顯示每一行的寫入時間。"
+  soft-wrap: 自動換行
+  soft-wrap-desc: "長行自動換行，而不是橫向捲動。"
+  highlight-errors: 醒目提示錯誤行
+  highlight-errors-desc: "彩色等級標記會一直顯示。"
+  date-format: "日期格式"
+  time-format: "時間格式"
+  font-size: 字型大小
+  color-scheme: 主題
+  show-stopped-containers: 顯示已停止的容器
+  group-containers: 容器分組
+  group-containers-desc: "依 Compose 專案、Swarm 堆疊或 dev.dozzle.group。"
+  show-app-icons: "應用程式圖示"
+  show-app-icons-desc: "隨 Dozzle 內建，絕不從網路下載。"
+  search: 搜尋日誌
+  search-desc: "檢視容器時取代瀏覽器的尋找功能。"
   show-std: 顯示標準輸出(stdout)與標準錯誤(stderr)標籤
-  show-std-desc: '標示該行來自 stdout 或 stderr。'
-  automatic-redirect: 自動重新導向至相同名稱的新容器
-  automatic-redirect-desc: '當容器被取代時，自動切換到新的容器。'
-  compact: 啟用緊湊模式
-  compact-desc: '縮小日誌行之間的間距，讓畫面顯示更多內容。'
+  show-std-desc: "標示該行來自 stdout 或 stderr。"
+  automatic-redirect: 跟隨重新建立的容器
+  automatic-redirect-desc: "容器被取代時，跳到新的容器。"
+  compact: 緊湊模式
+  compact-desc: "縮小間距，讓螢幕顯示更多行。"
   size:
     small: 小
     medium: 中
@@ -218,12 +347,12 @@ settings:
     none: 無
   grouping:
     always: 總是
-    at-least-2: 至少 2 個
+    at-least-2: "2 個以上的群組"
     never: 從不
   hour:
     auto: 自動
-    12: "12"
-    24: "24"
+    "12": "12 小時制"
+    "24": "24 小時制"
   log:
     preview: 這是日誌的預覽
     warning: 警告日誌看起來是這樣的
@@ -241,16 +370,18 @@ releases:
   two_parts: "{first} 與 {second}"
   latest: 最新版本
   no_releases: 您已經是最新版本
-log_actions:
-  copy_log: 複製日誌
-  jump_to_context: 跳至相關內容
+  newer: "有 1 個更新版本 | 有 {count} 個更新版本"
+  all: 所有版本
+  updates_summary: "已更新 1 個容器 | 已更新 {count} 個容器"
+  agents_mismatched: "1 個代理程式的版本不同 | {count} 個代理程式的版本不同"
 toasts:
   copied:
     title: 已複製
     message: 日誌已複製到剪貼簿
 analytics:
   creating_table: 正在建立臨時資料表...
-  downloading: 正在取得容器日誌... ({size})
+  fetching_logs: 正在取得容器日誌
+  loading_engine: 正在載入 SQL 引擎
   evaluating_query: 正在評估查詢...
   total_records: 共計 {count} 筆記錄。
   showing_first: 顯示前 {count} 筆。
@@ -261,19 +392,98 @@ analytics:
   example_all: 所有日誌
   example_count: 資料列數
   example_group: 依 {column} 計數
+  example_by_container: 依容器
+  include_previous: "包含 {count} 個較舊的容器"
+  containers_count: "{count} 個容器"
   export: 匯出
   export_csv: 下載 CSV
   export_json: 下載 JSON
+  query: 查詢
+  run: 執行
+  results: 結果
+  min: 最小
+  avg: 平均
+  max: 最大
+  p50: P50
+  p95: P95
+  distribution_of: "{column} 的分布"
+  rows: 1 列 | {count} 列
+updates:
+  title: 更新
+  count: 1 個更新 | {count} 個更新
+  available: 1 個可用更新 | {count} 個可用更新
+  running: 正在更新…
+  subtitle: 這些容器執行的映像檔比其映像檔倉庫提供的舊。
+  subtitle-running: 每台主機一次更新一個容器。
+  none: 所有容器都在執行其標籤指向的最新映像檔。
+  update-selected: 更新 | 更新 1 個 | 更新 {count} 個
+  self-last: Dozzle 最後更新，然後重新啟動。
+  read-only: 在此更新需要啟用容器操作並擁有 update 角色。
+  auto: 自動
+  auto-hint: 也會依自動更新排程更新
+  auto-footnote: 為容器加上標籤 {label}，即可依自動更新排程更新它。
+  check-only: 已加上標籤 {label}，因此會在 Dozzle 之外更新。
+  scheduled-running: 自動更新排程正在執行。
+  progress: 已完成 {done}/{total}
+  back: 返回
+  busy: 已有另一個更新正在執行。
+  summary: 已更新 {updated} 個
+  summary-failed: 已更新 {updated} 個，失敗 {failed} 個
+  status:
+    queued: 排隊中
+    pulling: 拉取中
+    recreating: 重建中
+    verifying: 驗證中
+    done: 已更新
+    rolled-back: 已復原
+    up-to-date: 最新
+    error: 失敗
+  release-notes: 版本說明
+  version:
+    rebuilt: 已重建
+    unknown: 版本未知（{reason}）
+    undeclared: 映像檔未宣告版本
+    rate-limited: 映像檔倉庫速率限制
+    auth: 映像檔倉庫需要登入
+    failed: 查詢失敗
 drawer:
   maximize: 最大化
   restore: 還原
+terminal:
+  connecting: 連線中
+  connected: 已連線
+  closed: 已中斷
+  connection-closed: 連線已關閉
+  not-running: 容器未執行
+  reconnect: 重新連線
+  attaching: 正在連線到 {name}
+  decrease-font: 縮小字級
+  increase-font: 放大字級
+  search: 搜尋
+  no-results: 無結果
+  previous-match: 上一個相符項目
+  next-match: 下一個相符項目
+  close-search: 關閉搜尋
 notifications:
+  history:
+    title: 動態
+    loading: 正在載入動態…
+    failed: 無法載入動態。
+    empty: 最近沒有任何警報觸發。
+    still-happening: 仍在持續
+    events: "{n} 個事件"
+    suppressed: "· 已抑制 {n} 個"
+    show-lines: 查看對應日誌
+    show-moment: 查看前後日誌
+    open-in-cloud: 在 Dozzle Cloud 中開啟
+    fired-recently: 次（最近）
   title: 通知
   description: 設定接收警報的位置和時間
   destinations: 目標
   add-destination: 新增目標
   alerts: 警報
   add-alert: 新增警報
+  new-alerts: 有新警報
   prefill-name: 錯誤警報
   prefill-expression: level == "error"
   add: 新增
@@ -282,6 +492,7 @@ notifications:
     enabled: 已啟用 ({count})
     paused: 已暫停 ({count})
   no-alerts: 尚未設定任何警報。建立一個以開始使用。
+  no-alerts-in-filter: 沒有符合此篩選條件的警示。
   default-alert-created: 我們已為您建立預設警報。當容器以錯誤結束時，您會收到通知。您隨時可以編輯或暫停。
   default-alert-failed: 無法自動建立警報，請改用下方的表單。
   alert:
@@ -294,54 +505,122 @@ notifications:
     sample-window: 取樣視窗
     destination: 目標
     dispatcher-deleted: 發送器已刪除
-    containers-count: "{count} 個容器"
-    triggered-count: "{count} 次觸發"
+    containers-count: "涉及 1 個容器 | 涉及 {count} 個容器"
+    triggered-count: "觸發過 1 次 | 觸發過 {count} 次"
+    never-triggered: 從未觸發
     last-triggered: "最後觸發: {time}"
+    delete-warning: 刪除這則警示？
+    delete-cancel: 保留
+    delete-confirm: 刪除
+    window-meta: "{duration} 區間"
+    cooldown-meta: "{duration} 冷卻"
   destination:
     http-webhook: HTTP Webhook
     dozzle-cloud: Dozzle Cloud
     edit: 編輯
     duplicate: 複製
     delete: 刪除
+    used-by: "被 1 則警示使用 | 被 {count} 則警示使用"
+    unused: 沒有警示使用
+    copy-of: "{name} 副本"
+    copy-failed: 無法複製此接收目標
+    delete-failed: 無法刪除此接收目標
+    delete-warning: 刪除此接收目標？
+    delete-warning-used: "有 1 則警示傳送到這裡，刪除後將不再通知。 | 有 {count} 則警示傳送到這裡，刪除後將不再通知。"
+    delete-cancel: 保留
+    delete-confirm: 刪除
   alert-form:
     create-title: 建立警報
     edit-title: 編輯警報
-    description: 訂閱符合您條件的日誌事件
+    description-log: 當容器日誌中出現符合的行時收到通知
+    description-metric: 當容器的 CPU、記憶體或磁碟使用率超過閾值時收到通知
+    description-event: 當容器啟動、停止、結束或健康狀態改變時收到通知
+    required: 必填
+    still-needed: "還需要：{fields}"
+    missing:
+      container-expression: 容器
+      condition: 條件
+      destination: 接收目標
+      name: 名稱
     alert-name: 警報名稱
     alert-name-placeholder: 例如，測試 API 錯誤
-    container-filter: 容器篩選器
-    containers-match: "{count} 個容器符合: {names}"
-    no-containers-match: 沒有容器符合此篩選器
-    log-filter: 日誌篩選器
-    logs-match: "{count} 筆日誌符合"
-    no-logs-match: 沒有日誌符合此篩選器
+    alert-name-hint: 顯示在警示卡片以及它發出的每則通知中。
+    container-filter: 容器
+    container-filter-hint: 此警示監看哪些容器。僅比對執行中的容器。
+    containers-match: "符合 1 個執行中的容器：{names} | 符合 {count} 個執行中的容器：{names}"
+    no-containers-match: 沒有執行中的容器符合此篩選條件
+    checking: 檢查中…
+    examples: "範例："
+    use-example: 使用此範例
+    seconds-unit: 秒
+    log-filter: 日誌條件
+    log-filter-hint: 哪些日誌行會觸發警示。
+    logs-match: "最近 {window} 內有 1 行符合 | 最近 {window} 內有 {count} 行符合"
+    no-logs-match: 最近 {window} 內沒有符合的行
+    log-preview-hint: 寫一個條件，看看最近哪些日誌行會觸發這則警示。
+    log-scan-note: "預覽掃描了第 1 個符合的容器。 | 預覽掃描了前 {count} 個符合的容器。"
+    preview-needs-containers: 請先選擇容器，才能用真實資料預覽。
+    preview-fix-expression: 修正運算式後即可看到預覽。
     destination: 目標
-    select-destination: 選擇目標
-    no-destinations: 尚未設定目標。請先新增一個。
+    no-destinations: 尚未設定接收目標。
     preview: 預覽
     cancel: 取消
     save: 儲存
     create: 建立警報
-    metric-filter: 指標表達式
-    expression-valid: 表達式有效
-    metric-fields-hint: "可用欄位：{fields}"
+    discard-title: 放棄這則警示？
+    discard-keep: 繼續編輯
+    discard-confirm: 放棄
+    metric-filter: 指標條件
+    metric-filter-hint: "可比較 cpu（%）、memory（%）、memoryUsage（位元組）或 mounts 的剩餘空間。"
+    metric-preview-hint: 寫一個條件，看看你的容器目前的狀況。
+    metric-preview-note: 根據 Dozzle 收集的最近 {duration} 統計資料。
+    metric-container: 容器
+    metric-cpu: CPU
+    metric-memory: 記憶體
+    metric-window-match: 區間
+    metric-firing: 將觸發
+    metric-matching-now: 目前超標
+    metric-no-samples: 無資料
+    metric-no-samples-hint: 符合的容器尚未收集到統計資料。
+    metric-would-fire: "目前會為 1 個容器觸發 | 目前會為 {count} 個容器觸發"
+    metric-would-not-fire: 目前沒有容器超過閾值
     sample-window-label: 取樣視窗
-    sample-window-hint: "當條件在 {duration} 內滿足時觸發警報"
+    sample-window-hint: "條件持續 {duration} 後觸發"
     cooldown-label: 冷卻時間
     cooldown-hint: "每個容器警報間隔 {duration}"
     no-cooldown: 無冷卻時間
+    immediate-label: "立即傳送"
+    immediate-hint: "不經 Dozzle Cloud 審查，立即傳送每個符合項目，上限為方案的每日警示數量。"
     alert-type: 警報類型
     log-alert: 日誌警報
     metric-alert: 指標警報
     event-alert: 事件警報
-    event-filter: 事件運算式
-    event-fields-hint: 可用欄位：{fields}
+    log-alert-description: 比對容器日誌中的行
+    metric-alert-description: 監看 CPU、記憶體與磁碟使用率
+    event-alert-description: 回應啟動、停止與健康狀態改變
+    type-switch-warning: 儲存會取代此警示的{type}條件，該條件將遺失。
+    event-filter: 事件條件
+    event-filter-hint: 哪些容器事件會觸發警示。
+    event-matches: "符合其中 1 個事件 | 符合其中 {count} 個事件"
+    event-matches-none: 不符合其中任何事件
+    event-preview-hint: 寫一個條件，看看它會攔截哪些容器事件。
+    event-preview-note: 這是範例事件，不是歷史紀錄。Docker 事件會在發生時即時比對。
   destination-form:
     create-title: 新增目標
     edit-title: 編輯目標
     description: 通知應發送到哪裡？
     name: 名稱
     name-placeholder: 例如，正式環境 Slack
+    name-hint: 為警示挑選接收目標時顯示的名稱。
+    name-taken: 已有其他接收目標使用此名稱。
+    still-needed: "還需要：{fields}"
+    missing:
+      name: 名稱
+      url: Webhook 網址
+      template: 範本
+    discard-title: 放棄這個接收目標？
+    discard-keep: 繼續編輯
+    discard-confirm: 放棄
     type: 類型
     webhook-title: HTTP Webhook
     webhook-description: Slack、Discord、自訂端點
@@ -349,21 +628,37 @@ notifications:
     cloud-description: 推送通知、電子郵件警報和 AI 摘要
     webhook-url: Webhook URL
     webhook-url-placeholder: https://hooks.foo.com/services/...
+    webhook-url-invalid: 請輸入完整的 http:// 或 https:// 網址。
     api-key: API 金鑰
-    payload-format: Payload 格式
+    payload-format: 請求內容
     format-slack: Slack
     format-discord: Discord
     format-ntfy: ntfy
     format-custom: 自訂
+    format-replace-warning: 這會覆蓋你已經寫好的範本。
+    format-replace-confirm: 取代
     template: 範本
     template-hint: Go 範本語法
+    template-placeholder: 帶 Go 範本佔位符的 JSON 內容
+    payload-mode-json: 有效的 JSON。每個值都會為你算繪並跳脫。
+    payload-mode-raw: 不是 JSON，因此整個內容會以算繪後的文字送出。
+    payload-mode-unbalanced: 範本語句未關閉。
+    payload-mode-empty: 留空則將完整通知以 JSON 送出。
+    variables: 可用變數
+    variables-all: 所有警示
+    variables-log: 僅日誌警示
+    variables-metric: 僅指標警示
+    variables-event: 僅事件警示
+    variables-scope-hint: 「所有警示」以外的欄位只在各自的警示類型下有值，用在別處會在送出時失敗。
     headers: 自訂標頭
     headers-hint: 選填的 HTTP 標頭（例如 Authorization）
     header-name: 標頭名稱
     header-value: 標頭值
     add-header: 新增標頭
+    remove-header: 移除標頭
     test: 測試
     test-success: 測試成功
+    test-unsupported: "此範本在 {kinds} 警示時會失敗，因此這些警示不會傳送到這裡。"
     cancel: 取消
     close: 關閉
     save: 儲存
@@ -371,13 +666,10 @@ notifications:
     cloud-exists: Dozzle Cloud 已連結
     link-cloud: 連結帳戶
     link-cloud-button: 連結 Dozzle Cloud
-    cloud-settings-hint: 若要設定您的管理頻道，請前往
     cloud-settings-link: Dozzle Cloud 設定
     cloud-checking: 正在檢查雲端狀態...
     cloud-relink: 您的 API 金鑰無效或已過期。請刪除並重新關聯您的帳戶。
     cloud-unavailable: Dozzle Cloud 暫時無法使用，請稍後再試。
-    cloud-plan: 方案
-    cloud-usage: 本期事件數
   empty-state:
     title: 開始使用通知
     description: 選擇當您的容器需要關注時，您希望如何接收警報。
@@ -389,12 +681,20 @@ notifications:
 cloud:
   title: Dozzle Cloud
   description: 遠端控制您的容器，並使用 AI 調查叢集中的問題。
+  pitch:
+    findings: 每日 AI 掃描您的錯誤與警告
+    alerts: 當機與門檻的即時警報
+    control: 隨時隨地啟動、停止與檢查容器
   learn-more: 瞭解更多
   link-instance: 連結實例
   relink-instance: 重新連結實例
   connected: 已連線
+  pro-badge: Dozzle Cloud Pro
+  locked-on-this-plan: Dozzle Cloud Pro 方案提供
   plan: 方案
-  usage: 本期事件數
+  usage: 事件
+  usage-agent-messages: 智慧代理對話
+  usage-log-bytes: 已索引資料
   dashboard: 儀表板
   settings: 設定
   error: 連線錯誤。請重新連結您的實例。
@@ -402,6 +702,7 @@ cloud:
   unlink: 取消連結
   unlink-confirm: 確定要取消與 Dozzle Cloud 的連結嗎？這將移除所有雲端通知目標。
   privacy:
+    details-link: "傳送了哪些內容"
     toggle: "將日誌與指標串流至 Dozzle Cloud"
     sends-heading: "啟用期間，您的容器會持續傳送："
     sends-logs: "日誌內容，於寫入時傳送"
@@ -409,7 +710,7 @@ cloud:
     never-heading: "永不傳送："
     never-env: "環境變數"
     off-note: "停用後，日誌與指標將保留在此執行個體上。已設定的警示仍會送達，遠端容器存取也仍可使用。"
-    per-container: "若要排除單一容器，請使用標籤：dev.dozzle.cloud.min_level=disabled"
+    per-container: "若要停止單一容器的日誌，請使用標籤：dev.dozzle.cloud.min_level=disabled"
     required-for: "AI 分析、日誌搜尋與資源歷史記錄所需。"
   welcome:
     watching-title: "Cloud 替你盯著日誌"
@@ -437,10 +738,12 @@ cloud:
     alerts-go-to: "提醒傳送至"
     your-cloud-account: "你的 Cloud 帳戶"
     change: "變更"
+    chat-also: "也在手機上透過 Telegram 或 Discord 接收。"
+    chat-connect: "連接"
     turn-on: "開啟 1 則提醒 | 開啟 {count} 則提醒"
     turn-on-short: "開啟"
     continue-without: "不啟用提醒，繼續"
-    skip-alerts: "暫時不用，只傳送每日調查結果"
+    skip-alerts: "暫不"
     ready: "就緒"
     done-title: "已經設定好了"
     done-body: "以下是每類通知出現的位置。"
@@ -454,19 +757,101 @@ cloud:
     where-tuning: "依容器微調"
     where-tuning-detail: "在「通知」頁面縮小範圍、靜音或刪除任何規則。"
     done: "完成"
+    steps:
+      watching: "Cloud 能做什麼"
+      alerts: "即時警示"
+      done: "在哪裡查看"
     signals:
       exited: "容器以錯誤結束"
       unhealthy: "容器變為 unhealthy"
       oom: "被核心終止（OOM）"
       restart: "容器已重新啟動"
+      updated: "容器已由 Dozzle 更新"
       cpu: "CPU 超過 90% 持續 5 分鐘"
       memory: "記憶體超過 90% 持續 5 分鐘"
       disk: "磁碟區已用超過 85%"
       disk-free: "磁碟區剩餘空間不足 1 GB"
       fatal: "任何 fatal 行"
       error: "任何 error 行"
+cloud-rail:
+  title: Dozzle Cloud
+  chat: 詢問 Dozzle
+  metrics: 指標
+  alerts: 警報
+  close: 關閉
+  hide: 隱藏雲端側欄
+  show: 顯示雲端側欄
+  alerts-empty-here: 目前檢視的內容沒有觸發過警報。
+  all-activity: 全部活動
+  metrics-no-container: 開啟一個容器即可檢視歷史。
+  metrics-loading: 正在載入歷史…
+  metrics-failed: 無法載入歷史。
+  metrics-empty: 該時間範圍還沒有記錄。
+  metrics-peak: 峰值
+  metrics-bucket: "{duration} 平均值"
+  window-1h: 1 小時
+  window-6h: 6 小時
+  window-24h: 24 小時
+  window-7d: 7 天
+cloud-chat:
+  title: 問 Dozzle
+  close: 關閉
+  clear: 清除對話
+  empty: 就眼前看到的內容提問。助手能看到這個檢視，也能讀這些日誌。
+  thinking: 思考中…
+  doing:
+    logs: 正在讀取日誌…
+    containers: 正在查看容器…
+    stats: 正在檢查資源使用…
+    inspect: 正在檢查容器…
+    notifications: 正在檢查通知…
+    action: 正在執行操作…
+    working: 處理中…
+  step:
+    logs: 搜尋日誌
+    containers: 查看容器
+    stats: 檢查資源使用量
+    inspect: 檢查容器
+    alerts: 檢視警報
+    findings: 檢視發現
+    events: 檢查容器歷史
+    docs: 閱讀文件
+    notifications: 檢查通知
+    action: 執行操作
+  phase:
+    reading: 閱讀問題
+    reviewing: 整理找到的內容
+    writing: 撰寫回答
+    retrying: 比平常久，正在重試
+  found: 找到 {n} 筆
+  nothing-found: 沒有找到
+  worked-for: 花了 {time}
+  earlier: 較早的 {n} 筆
+  placeholder: 就這些日誌提問
+  historical: 歷史
+  n-containers: "{n} 個容器"
+  evidence: 隨問題一起傳送
+  lines-in-view: 檢視中 {n} 行
+  this-log: 這則日誌
+  remove-log: 移除這則日誌
+  send: 傳送
+  suggest-summarize: 總結目前發生了什麼
+  suggest-errors: 找出錯誤與警告
+  suggest-next: 接下來我該看什麼？
+  error-unavailable: 助理目前無法使用。
+  error-not-configured: 尚未連結 Dozzle Cloud，沒有可以提問的助理。
+  section-ask: 助手
+  ask-for: 就 {query} 問 Dozzle
+  ask-hint: 根據檢視裡的容器作答
+  ask-shortcut: 提問
 cloud-search:
   containers-section: "容器"
+  section-logs: "日誌"
+  no-matches: "沒有符合的容器或指令"
+  nav-hint: "導覽"
+  pin-shortcut: "釘選為欄位"
+  merge-shortcut: "合併到日誌串流"
+  unmerge-shortcut: "從日誌串流中移除"
   search-logs-for: '搜尋日誌 "{query}"'
   across-containers: "已在所有容器中建立索引"
   connect-to-enable: "連接 Dozzle Cloud 以搜尋日誌"
@@ -474,27 +859,26 @@ cloud-search:
   open-container: "打開容器"
   search-logs-shortcut: "搜尋日誌"
   cloud-connected: "Cloud 已連接"
+  cloud-error: "Cloud 連線錯誤"
   results-page-title: "日誌搜尋"
   no-results: "沒有匹配的日誌行。"
   search-failed: "Cloud 搜尋失敗。"
   search-empty-prompt: "輸入查詢以搜尋日誌。"
   searching: "搜尋中…"
   hits-count: "{n} 條結果"
-  window-suffix: "在過去 14 天內"
+  window-since: "自 {time} 起"
   hero-title-cloud: "搜尋容器和日誌"
   hero-title-plain: "搜尋容器"
   hero-pill-indexed: "Cloud 索引"
   modal-placeholder-cloud: "搜尋容器和日誌…"
   modal-placeholder-plain: "搜尋容器…"
-  col-time: "時間"
-  col-level: "級別"
-  col-container: "容器"
-  col-message: "訊息"
   container-removed: "容器已被刪除"
   cta-settings: "Cloud 設定"
   container-removed-pill: "已刪除"
 command-palette:
   section-commands: 命令
+  section-recent: "最近"
+  run-hint: "執行指令"
   restart-container: 重新啟動 {name}
   stop-container: 停止 {name}
   start-container: 啟動 {name}
@@ -509,3 +893,349 @@ command-palette:
   toggle-std: 切換 stdout/stderr 標籤
   toggle-scrollbars: 切換較小的捲軸
   open-settings: 開啟設定
+  section-updates: "有可用更新"
+  section-hosts: "主機"
+  open-analytics: "開啟日誌分析"
+  clear-logs: "清除日誌"
+  attach-shell: "附加到 {name}"
+  exec-shell: "在 {name} 中開啟 Shell"
+  open-assistant: "詢問助理"
+  check-container-updates: "檢查 {name} 的更新"
+  skip-update: "略過 {name} 的此更新"
+  review-updates: "檢視 1 個更新 | 檢視 {count} 個更新"
+  confirm-stop: "再按一次 ↵ 停止 {name}"
+  confirm-update: "再按一次 ↵ 更新 {name}"
+  confirm-hint: "確認"
+  open-settings-page: "設定：{page}"
+  open-notifications: "開啟通知"
+  open-logs: "開啟日誌"
+  state-on: "開"
+  state-off: "關"
+  prefix-commands: "命令"
+  prefix-hosts: "主機"
+  prefix-ask: "提問"
+  actions-hint: "操作"
+  actions-placeholder: "篩選操作…"
+  back-hint: "返回"
+setup:
+  title: 設定 Dozzle
+  next: 下一步
+  back: 返回
+  finish-later: 稍後完成
+  close: 關閉
+  copy: 複製
+  steps:
+    login: 登入
+    login-note: 請先完成此步驟
+    actions: 操作與 Shell
+    cloud: Dozzle Cloud
+    cloud-note: 選用
+    hosts: "主機"
+    hosts-note: "選用"
+    update: "自動更新"
+    update-note: "需要操作功能"
+    restart: 重新啟動
+  login:
+    title: 啟用登入
+    subtitle: 任何能連到 Dozzle 的人都能讀取你的日誌。請先鎖定存取。
+    no-data-title: 未掛載 /data
+    no-data-body: 使用者與設定會儲存在 /data。沒有掛載磁碟區的話，下次重建容器時它們就會消失。請掛載一個磁碟區後再檢查。
+    check-again: 重新檢查
+    tab-account: Dozzle 帳戶
+    tab-proxy: 我的代理伺服器
+    tab-oidc: OIDC
+    username: 使用者名稱
+    email: 電子郵件
+    optional: （選用）
+    password: 密碼
+    confirm: 確認密碼
+    password-hint: 至少 8 個字元。使用者名稱可包含字母、數字、點、連字號與底線。
+    mismatch: 兩次輸入的密碼不一致。
+    saved-volume: 已儲存到掛載的磁碟區
+    after-restart: 重新啟動後啟用登入
+    on: 登入已啟用
+    users-exist: users.yml 已存在。將驗證提供者設為 simple 即可使用它。
+    create-account: 建立帳戶
+    proxy-body: Authelia、Authentik、Cloudflare Access 等服務負責使用者登入，再透過 Remote-User 標頭將使用者名稱傳給 Dozzle。
+    proxy-warning-title: 只對外公開代理伺服器
+    proxy-warning-body: Dozzle 會信任任何來源的這個標頭。如果 Dozzle 本身的連接埠可被存取，任何人都能冒充任意使用者。
+    proxy-docs: 轉發代理指南
+    use-proxy: 使用我的代理伺服器
+    oidc-body: OIDC 需要用戶端密鑰，因此這裡不會儲存任何內容。請將以下內容加入 compose 檔案並重建容器。
+    oidc-docs: OpenID Connect 指南
+    skip: "不設定登入，繼續"
+    manual-restart: Dozzle 在此環境下無法自行重新啟動。請重新啟動容器以啟用登入，或在 compose 檔案中設定。
+    restart-hint: 你會進入登入頁面。登入後設定會繼續。
+  actions:
+    title: 操作與 Shell
+    subtitle: 決定 Dozzle 可以對你的容器做什麼。
+    example-status: 已結束 (1) 2 分鐘前
+    example-restart: 重新啟動
+    example: "範例"
+    actions-label: 啟動、停止與重新啟動
+    actions-desc: 在發現錯誤的頁面上直接修復當掉的容器。
+    shell-label: Shell
+    shell-desc: 附加到容器或在容器內執行指令。
+    shell-warning: 容器的 Shell 存取權通常等同於主機的存取權。除非需要，否則請保持關閉。
+    locked: "由 {env} 設定"
+    window-closed: "未開啟登入時，設定只在全新安裝後的前 15 分鐘內接受變更。請使用環境變數設定，或先開啟登入。"
+    window-closed-env: "沒有登入時，設定只在新安裝後的前 15 分鐘內接受變更。請在 compose 檔案中設定 {envs}，或先開啟登入。"
+    no-access: 你的帳戶無權變更這些設定。
+    restart-note: 這些設定會在 Dozzle 重新啟動後生效。
+  hosts:
+    title: "新增其他主機"
+    subtitle: "在這個 Dozzle 中查看其他機器上的容器。在每台機器上執行代理程式，然後在這裡新增它的位址。"
+    run-title: "執行代理程式"
+    run-body: "在另一台機器上，將以下內容加入 compose 檔案並啟動。請讓 7007 連接埠只留在私人網路中。"
+    custom-cert: "這個 Dozzle 使用自己的憑證，因此代理程式需要同一組憑證，否則會拒絕連線。"
+    cert-docs: "憑證指南"
+    connect-title: "連線"
+    address: "位址"
+    name: "名稱"
+    optional: "（選用）"
+    add: "新增主機"
+    connect-note: "Dozzle 會先連線再儲存。主機會立即出現，不需要重新啟動。"
+    added: "已連線至 {name}。"
+    list-title: "代理程式"
+    connected: "已連線"
+    offline: "未連線"
+    remove: "移除"
+    skip: "稍後再說"
+    error-exists: "這個代理程式已經新增過了。"
+    error-duplicate: "這台機器已經以另一個主機的身分連線。如果這個代理程式使用相同的 Docker 引擎，請為它設定專屬的 DOZZLE_HOST_ID。"
+    error-connect: "無法連線至代理程式：{reason}"
+    error-cert: "代理程式的憑證與這個 Dozzle 不同。請重新複製程式碼片段，更新代理程式後重新建立。"
+    error-cert-custom: "代理程式沒有這個 Dozzle 的自訂憑證。請把相同的憑證和金鑰檔案提供給代理程式，然後重新建立。"
+    error-unsupported-mode: "在此模式下無法在這裡新增或移除主機。"
+    error-invalid: "這個位址或名稱無效。"
+    error-rate-limited: "嘗試次數過多。請稍候一分鐘再試。"
+    error-env-agent: "這個代理程式是透過 DOZZLE_REMOTE_AGENT 設定的，只能在那裡移除。"
+    error-not-found: "這個代理程式已不在清單中。"
+    error-custom-cert: "這個 Dozzle 已經使用自訂憑證，因此不需要建立私有憑證。"
+    private-label: "私人憑證"
+    private-desc: "只有這個 Dozzle 能連線到代理程式。其他代理程式不受影響。"
+    private-warning: "這段內容包含私密金鑰，請像密碼一樣保管。"
+    private-pill: "私人"
+    private-error: "無法建立私人憑證，因此改用共用憑證。{reason}"
+    private-missing: "這個 Dozzle 還沒有私人憑證。請重新開啟「私人憑證」後重試。"
+  cloud:
+    title: 連接 Dozzle Cloud
+    subtitle: 不必一直開著分頁，也能在出問題時馬上知道。
+    alerts-title: 出問題時立即通知
+    alerts-body: "當機、OOM 終止與錯誤激增，傳送到 Telegram、Discord、Slack 或電子郵件。"
+    chat-title: "用手機問哪裡壞了"
+    chat-body: "傳訊息給 Telegram 或 Discord 機器人。它會讀取你的日誌，並在動作開啟時，經你確認後重新啟動容器。"
+    updates-title: "會被檢查的更新"
+    updates-body: "每次自動更新後，Dozzle Cloud 會將錯誤與之前比較，若變多則提供回滾。"
+    connect: 連接 Dozzle Cloud
+    learn-more: 了解更多
+    skip: "暫不"
+  update:
+    pill-on: "使用操作功能 · 已開啟"
+    pill-pending: "隨操作功能一起開啟"
+    title: "讓容器保持最新"
+    subtitle: "Dozzle 會在空閒時段尋找較新的映像檔，並更新自身和你選擇的容器。設定、使用者和警示都會保留。"
+    auto-label: "自動更新"
+    auto-desc: "檢查是否有較新的映像，有的話就更新 Dozzle 和下方的容器。"
+    when-label: "時間"
+    time-label: "時刻"
+    server-time: "使用伺服器的時區。"
+    daily: "每天"
+    weekly: "每週日"
+    version-label: "版本"
+    update-now: "立即更新"
+    pulling: "正在拉取新映像檔"
+    up-to-date: "Dozzle 已是最新版本。"
+    restarting: "Dozzle 正在替換為新版本。"
+    restarting-hint: "新版本回應後頁面會立即重新載入。"
+    needs-actions: "重新啟動後開啟操作功能，立即更新才可使用。"
+    reason-pinned-tag: "你使用的是固定的版本標籤，因此沒有更新的映像檔可拉取。請使用 latest 之類的標籤來取得更新。"
+    reason-unsupported: "Dozzle 在這裡找不到自己的容器，因此無法替換自身。"
+    reason-swarm-worker: "Dozzle 以 Swarm 服務的形式執行在工作節點上。只有管理節點才能更新服務，請在管理節點上執行 Dozzle，或使用 docker service update 更新。"
+    pull-denied: "無法拉取 {image}。它可能只存在於這台機器上，或者映像倉庫需要 docker login。"
+  restart:
+    title: 重新啟動 Dozzle
+    subtitle: 這些變更已儲存，重新啟動後生效。
+    change-auth: 登入
+    "on": "開啟"
+    "off": "關閉"
+    button: 重新啟動 Dozzle
+    restarting: 正在重新啟動 Dozzle
+    restarting-hint: Dozzle 恢復後頁面會自動重新整理。
+    slow-title: 花費的時間比預期長
+    slow-body: Dozzle 尚未恢復。請檢查容器，然後重新整理頁面。
+    reload: 重新整理
+    manual: Dozzle 在此環境下無法自行重新啟動。請重新啟動容器，或在 compose 檔案中設定。
+    done-title: 一切就緒
+    done-body: 不需要重新啟動。你隨時可以從設定回到這裡。
+    nothing-title: "無需重新啟動"
+    nothing-body: "這次沒有設定任何步驟。準備好後，隨時可以在設定中開啟精靈。"
+    done: 完成
+  error:
+    generic: 發生錯誤，請再試一次。
+    load: 無法載入設定精靈，請稍後再試。
+    conflict: 此項已設定，或已由環境變數固定。
+    no-data: 未掛載 /data，因此無法儲存。
+    window-closed: "未開啟登入時，設定只在全新安裝後的前 15 分鐘內接受變更。請改用環境變數開啟登入。"
+mcp-authorize:
+  title: "授權 MCP 用戶端"
+  subtitle: "{client} 想代表您使用 Dozzle。"
+  unnamed-client: "未命名的用戶端"
+  redirect-label: "將您導回"
+  access-label: "存取權限"
+  access-value: "讀取容器、日誌與統計資料"
+  user-label: "登入身分"
+  hint: "只允許您剛剛親自連線的用戶端，並確認上方的位址符合預期。"
+  allow: "允許"
+  deny: "拒絕"
+  return: "返回用戶端"
+  redirecting: "正在返回用戶端。完成後即可關閉此分頁。"
+  failed: "無法完成此請求。"
+mobile-nav:
+  label: "主選單"
+  home: "首頁"
+  browse: "瀏覽"
+  back: "返回"
+time-range:
+  title: "時間範圍"
+  live: "即時"
+  last-15m: "最近 15 分鐘"
+  last-1h: "最近 1 小時"
+  last-6h: "最近 6 小時"
+  last-24h: "最近 24 小時"
+  custom: "自訂範圍"
+  from: "開始"
+  to: "結束"
+  keep-following: "持續跟隨"
+  volume: "日誌量"
+  errors: "錯誤"
+  bucket: "{lines} 行 · {errors} 個錯誤"
+  not-scanned: "未讀取"
+  invalid: "結束時間必須晚於開始時間。"
+  show: "顯示日誌"
+  edge-start: "起始"
+  edge-end: "截至"
+  show-earlier: "顯示更早"
+  show-later: "顯示更晚"
+  to-now: "到現在"
+  shift-earlier: "上一時段"
+  shift-later: "下一時段"
+  last-short: "最近 {span}"
+  since-short: "自 {time} 起"
+  custom-hint: "先選日期，再選時間。時間為 {zone}。"
+  keep-following-hint: "結束時間保持開放，持續顯示新日誌。"
+  previous-month: "上個月"
+  next-month: "下個月"
+  empty-range: "此範圍內沒有日誌"
+  empty-range-hint: "{from} 至 {to} 之間沒有寫入任何內容。"
+  empty-since: "自 {time} 起沒有日誌"
+  empty-since-hint: "新日誌寫入後會立即顯示在這裡。"
+  jump-before: "更早的日誌 · {time}"
+  jump-after: "更晚的日誌 · {time}"
+  empty-window: "此時段內沒有日誌"
+update-marker:
+  updated: "已更新"
+  rolled-back: "已回復"
+  undone: "更新已撤銷"
+  roll-back: "回復"
+  by:
+    schedule: "由自動更新排程"
+    dozzle: "來自 Dozzle"
+    cloud: "來自 Dozzle Cloud"
+  verdict:
+    pending: "Dozzle Cloud 正在觀察這次更新"
+    clean: "看起來正常"
+    regressed: "看起來有問題"
+    unsure: "可能有問題"
+    rolled_back_by_dozzle: "Dozzle 已還原先前的容器"
+  decision:
+    rolled_back: "已回復"
+    kept: "已保留"
+auto-update:
+  which-label: "哪些容器"
+  mode-off: "僅 Dozzle"
+  mode-off-desc: "其他容器只做檢查，等你手動更新。"
+  mode-all: "全部"
+  risky: "{count} 個容器把資料存放在具名磁碟區中。資料庫可能升級到無法讀取其資料的版本。 | {count} 個容器把資料存放在具名磁碟區中。資料庫可能升級到無法讀取其資料的版本。"
+  containers-still: "其他容器仍依此排程更新。"
+  needs-actions: "容器操作關閉期間，不會自動更新任何內容。"
+  containers: "容器"
+  status-current: "已是最新"
+  status-available: "有可用更新"
+  status-pending: "尚未檢查"
+  status-off: "不檢查"
+  status-pinned: "已固定到摘要"
+  status-local: "本機建置"
+  status-private: "私有登錄庫"
+  status-unknown: "無法檢查"
+  safety-title: "安全保障"
+  safety-verify: "每次更新都會確認新容器能穩定執行，失敗則回復。"
+  safety-cleanup: "舊映像檔隨後會被刪除，並保留一個上一版映像檔用於回復。"
+  safety-skip: "固定到摘要、本機建置或來自沒有登入資訊的私有登錄庫的映像檔會被略過。"
+  learn-more: "自動更新如何運作"
+  footnote: "{link}決定哪些容器自動更新。"
+  footnote-link: "設定 → 更新"
+  mode-labelled: "有標籤的容器"
+  mode-labelled-desc: "以及標有 {label} 的容器。"
+  mode-all-desc: "除了標有 {label} 的容器以外的所有容器。"
+  risky-hint: "為容器加上 {label} 標籤即可將其排除。"
+  empty: "沒有容器會自動更新。為容器加上 {label} 標籤即可加入。"
+inspect:
+  overview: "概覽"
+  ports: "連接埠"
+  mounts: "掛載"
+  env: "環境變數"
+  labels: "標籤"
+  id: "ID"
+  command: "指令"
+  created: "建立於"
+  started: "啟動於"
+  finished: "結束於"
+  restart-policy: "重新啟動原則"
+  network: "網路"
+  memory-limit: "記憶體限制"
+  cpu-limit: "CPU 限制"
+  unlimited: "無限制"
+  oom-killed: "因 OOM 被終止"
+  exit-code: "結束碼 {code}"
+  restarts: "重新啟動次數：{count}"
+  show-value: "顯示值"
+  hide-value: "隱藏值"
+  env-hidden: "值已隱藏。檢視需要 shell 權限。"
+  load-failed: "無法載入容器詳細資料。"
+  networks: "網路"
+  container-count: "1 個容器 | {count} 個容器"
+  subnet: "子網路"
+  gateway: "閘道"
+  ip-usage: "已使用的 IP"
+  connected-containers: "已連接的容器"
+  this-container: "此容器"
+  driver: "驅動程式"
+  scope: "範圍"
+  driver-options: "驅動程式選項"
+  mounted-by: "掛載者"
+  details-failed: "無法載入詳細資料。"
+  size: "大小"
+  mountpoint: "掛載點"
+reclaim:
+  clean-up: "清理"
+  free-up: "釋放 {size}"
+  confirm-title: "要在 {host} 上釋放 {size} 嗎？"
+  cannot-undo: "此操作無法復原。"
+  images-repull: "已停止的 stack 下次啟動時會重新拉取映像。"
+  volumes-warning: "有 1 個磁碟區存放著目前沒有容器使用的資料。刪除後這些資料會消失，例如容器已被移除的資料庫。 | 有 {count} 個磁碟區存放著目前沒有容器使用的資料。刪除後這些資料會消失，例如容器已被移除的資料庫。"
+  volumes-confirm: "我了解，刪除磁碟區"
+  delete: "刪除"
+  deleting: "正在釋放 {size}…"
+  freed: "已釋放 {size}"
+  failed: "清理失敗"
+  agent-too-old: "此 agent 尚無法清理，請更新至最新版本。"
+  preview-note: "清理會在執行時再次檢查，因此在那之前變成未使用的項目也會一併刪除。"
+  preview-failed: "無法列出這些項目。"
+  preview-agent-too-old: "請更新此 agent 以查看清單。"
+  enable-actions: "啟用容器操作即可在此清理。"
+  schedule-label: "自動清理"
+  scheduled-run: "排程清理"
+  schedule-desc: "清理所有主機上未使用的映像、已停止的容器和建置快取。永遠不會刪除磁碟區。"
+  last-run: "上次執行於 {when} 釋放了 {size}。"
+  last-run-failed: "有 {count} 台主機無法清理，請查看日誌。 | 有 {count} 台主機無法清理，請查看日誌。"

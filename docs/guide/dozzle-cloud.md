@@ -1,112 +1,29 @@
 ---
 title: Dozzle Cloud
+description: What Dozzle Cloud adds to self-hosted Dozzle, including alert triage, notifications to Slack, Telegram or Discord, and daily log review on paid plans.
 ---
 
 # Dozzle Cloud
 
-<Badge type="tip" text="New in v10" />
+[Dozzle Cloud](https://cloud.dozzle.dev) is an optional managed companion to self-hosted Dozzle. Dozzle itself stays fully open source and self-hosted; Cloud sits on top of it and takes over the part that is genuinely hard to run yourself — deciding what is worth waking you up for, and figuring out what actually broke.
 
-[Dozzle Cloud](https://cloud.dozzle.dev) is an optional managed companion to self-hosted Dozzle. It links your instances together, summarizes container events, distributes alerts across multiple channels, and lets you ask questions about your infrastructure from chat. Dozzle itself remains fully open source and self-hosted; Cloud sits on top.
+Your Dozzle makes an outbound connection to Cloud. There is no inbound port, no public IP, and no agent to install.
 
-The goal is for Dozzle Cloud to feel like the personal SRE assistant you never knew you wanted: it watches your containers, tells you when something matters, and stays out of the way when nothing does.
+The free plan is the whole alerting layer: every alert your Dozzle rules fire is triaged into one readable message, repeats fold into a single alert with a count, and it goes out to email, Telegram, Discord, Slack, ntfy, webhooks, or browser push. Paid plans add the proactive half, where Cloud reads your logs every morning and reports problems that never fired an alert, along with longer history and more instances.
 
-## Features
+See [Features](https://cloud.dozzle.dev/features) for the full tour and [Pricing](https://cloud.dozzle.dev/pricing) for what each plan includes.
 
-### <Icon icon="mdi:text-box-outline" inline /> Log Summaries
+## Where to go next
 
-Container events are batched and summarized using an LLM. Each summary records severity, the source container, and a link back to the full log line in your Dozzle instance.
+| Page                                                       | What it covers                                                                         |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| [Connecting Your Instance](/guide/dozzle-cloud/connecting) | Linking, why no public IP or open port is needed, firewall rules, troubleshooting      |
+| [In Your Dozzle](/guide/dozzle-cloud/in-dozzle)            | The cloud rail, alerts that survive a reload, and what a Cloud-less install still does |
+| [Notification Channels](/guide/dozzle-cloud/channels)      | Every channel, how to set each one up, and how to make alerts quieter                  |
+| [Plans & Limits](/guide/dozzle-cloud/plans)                | Running into a limit, the instance limit, usage, cancelling                            |
+| [Your Data](/guide/dozzle-cloud/your-data)                 | What leaves your host, how to stop it, what Cloud stores, API keys                     |
 
-### <Icon icon="mdi:group" inline /> Pattern Clustering
-
-Repeated errors are grouped and counted instead of being delivered individually. A loop emitting the same exception 200 times produces one notification with a frequency, not 200.
-
-### <Icon icon="mdi:robot-outline" inline /> AI Agent
-
-A chat-based agent answers questions about container state and recent log activity. It is available in Telegram and Discord.
-
-On Pro and Team plans, the agent can also act on containers (start, stop, restart) directly from the conversation, without requiring shell access to the host.
-
-### <Icon icon="mdi:calendar-clock" inline /> Daily Digests
-
-A scheduled summary of recent activity across your linked instances: top error patterns, event counts, and overall health. Delivered by email at a time and timezone you configure.
-
-### <Icon icon="mdi:bell-ring-outline" inline /> Notification Channels
-
-Alerts can be routed to multiple channels in parallel. Each channel can be enabled or disabled independently and scoped to specific Dozzle instances.
-
-| Channel                                                    | Alerts | Daily Digest | Two-way agent |
-| ---------------------------------------------------------- | :----: | :----------: | :-----------: |
-| <Icon icon="mdi:telegram" inline /> Telegram               |   ✓    |      ✓       |       ✓       |
-| <Icon icon="ic:baseline-discord" inline /> Discord         |   ✓    |      ✓       |       ✓       |
-| <Icon icon="mdi:email-outline" inline /> Email             |   ✓    |      ✓       |               |
-| <Icon icon="mdi:slack" inline /> Slack                     |   ✓    |              |               |
-| <Icon icon="simple-icons:ntfy" inline /> ntfy              |   ✓    |              |               |
-| <Icon icon="mdi:webhook" inline /> Webhooks                |   ✓    |              |               |
-| <Icon icon="mdi:bell-badge-outline" inline /> Browser push |   ✓    |              |               |
-
-### <Icon icon="mdi:bell-sleep-outline" inline /> Notification Muting
-
-Notifications can be muted for one hour, eight hours, until the next morning, or until the following week. Useful during incidents or planned maintenance.
-
-### <Icon icon="mdi:view-dashboard-outline" inline /> Multi-Instance Dashboard
-
-Linked Dozzle instances appear in a single dashboard. Each instance authenticates with an API key, with no additional agent required on the host. The dashboard shows online status, container inventory, and live log streaming.
-
-### <Icon icon="mdi:database-search-outline" inline /> Full-Text Log Search
-
-Every log line forwarded from your linked instances is written into a full-text search index. You can query across all instances at once, or filter by container, severity, or time range. Searches return results in milliseconds even over weeks of history, and each match links back to the surrounding context in the source instance. Retention is plan-dependent and ranges from 24 hours to 30 days.
-
-### <Icon icon="mdi:shield-lock-outline" inline /> Security
-
-- API keys are hashed with BLAKE2b and support expiration.
-- Sign-in uses GitHub or Google OAuth.
-- Logs and event content are stored only for as long as your plan's retention window.
-
-## Connecting an Instance
-
-To link a self-hosted Dozzle to Dozzle Cloud:
-
-1. Open your Dozzle instance and click the **cloud** icon in the top bar.
-2. Click **Link instance**. You will be redirected to authenticate and confirm the connection.
-3. Once linked, configure alert subscriptions inside Dozzle to choose which events are forwarded.
-
-## Controlling What Gets Forwarded
-
-By default, every running container streams its logs to Dozzle Cloud while linked. For noisy containers where info-level chatter has no diagnostic value, you can filter or fully opt-out per container with a single label.
-
-### `dev.dozzle.cloud.min_level`
-
-| Value                                         | Effect                                                                                                |
-| --------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| _(unset)_                                     | All log lines are forwarded. Default.                                                                 |
-| `disabled`                                    | The container is completely skipped. No logs are forwarded to Cloud.                                  |
-| `trace`                                       | Same as unset, since trace is the lowest level. Everything is forwarded.                              |
-| `debug` / `info` / `warn` / `error` / `fatal` | Only lines at that level or higher are forwarded. Lines without a detected level always pass through. |
-
-An unrecognized value (a typo like `warning` or `wran`) is logged as an error and ignored, so the container streams everything as if the label were unset.
-
-The label is read when the log reader starts. Changing it on a running container takes effect after the container restarts.
-
-```yaml
-services:
-  zigbee2mqtt:
-    image: koenkk/zigbee2mqtt
-    labels:
-      # Only forward warn/error/fatal to Dozzle Cloud
-      - dev.dozzle.cloud.min_level=warn
-
-  noisy-debug-tool:
-    image: example/debug
-    labels:
-      # Don't send anything from this container
-      - dev.dozzle.cloud.min_level=disabled
-```
-
-The filter runs on your Dozzle instance before logs leave the host, so dropped lines never touch the network or count against your plan. Local log viewing in Dozzle is unaffected.
-
-## Pricing
-
-The free tier is intentionally generous; you should be able to actually use Dozzle Cloud on a homelab or a small team without hitting a wall. Paid plans exist for higher event volumes, longer retention, and the agent's container actions. See [cloud.dozzle.dev](https://cloud.dozzle.dev) for current limits and plan details.
+Alert rules themselves are configured on your own instance, not in Cloud. See [Alerts](/guide/alerts-and-webhooks).
 
 ## Feedback
 

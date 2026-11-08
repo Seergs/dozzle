@@ -1,5 +1,6 @@
 ---
 title: FAQ
+description: Fixes for common Dozzle problems, such as upgrading, backing up /data, logs that never load behind nginx or Traefik, and duplicate host IDs.
 ---
 
 # Frequently Asked Questions
@@ -19,7 +20,7 @@ docker pull amir20/dozzle:latest
 docker compose up -d dozzle
 ```
 
-User settings, notification rules, and other state are stored in `/data` (see below), so keep that volume mounted across upgrades. For production use, pin a specific tag (e.g. `amir20/dozzle:v8.14.1`) rather than `latest` so upgrades are deliberate. Release notes are published on the [GitHub releases page](https://github.com/amir20/dozzle/releases). Rolling back is as simple as redeploying an older tag.
+User settings, notification rules, and other state are stored in `/data` (see below), so keep that volume mounted across upgrades. For production use, pin a specific tag (e.g. `amir20/dozzle:v10.9.2`) rather than `latest` so upgrades are deliberate. Release notes are published on the [GitHub releases page](https://github.com/amir20/dozzle/releases). Rolling back is as simple as redeploying an older tag.
 
 ## My platform wraps the container entrypoint and Dozzle fails with `no such file or directory`
 
@@ -40,7 +41,7 @@ docker run \
   amir20/dozzle:alpine
 ```
 
-Versioned tags follow the same pattern (`amir20/dozzle:v8.14.1-alpine`). The scratch-based `latest` stays the recommended image for everything else, since it has a much smaller footprint and no distro packages to patch.
+Versioned tags follow the same pattern (`amir20/dozzle:v10.9.2-alpine`). The scratch-based `latest` stays the recommended image for everything else, since it has a much smaller footprint and no distro packages to patch.
 
 ## What is stored in `/data` and how do I back it up?
 
@@ -107,7 +108,9 @@ http:
 
 ## We have tools that use Dozzle when a new container is created. How can I get a direct link to a container by name?
 
-Dozzle has a special [route](https://github.com/amir20/dozzle/blob/master/assets/pages/show.vue) that can be used to search containers by name and then forward to that container. For example, if you have a container with name `"foo.bar"` and id `abc123`, you can send your users to `/show?name=foo.bar` which will be forwarded to `/container/abc123`.
+Dozzle has a special [route](https://github.com/amir20/dozzle/blob/main/assets/pages/show.vue) that can be used to search containers by name and then forward to that container. For example, if you have a container with name `"foo.bar"` and id `abc123`, you can send your users to `/show?name=foo.bar` which will be forwarded to `/container/abc123`.
+
+To open several containers in one merged view, separate the names with commas: `/show?name=foo,bar` forwards to `/merged/<ids>`. When more than one container has the same name, the most recently started one wins. Add `host=<host id>` to only match containers on that host, e.g. `/show?name=foo,bar&host=abc`. Names that match nothing are skipped.
 
 ## I installed Dozzle but memory consumption doesn't show up!
 
@@ -142,20 +145,22 @@ Sometimes, VMs may be restored from backups with the same host ID. This can caus
 
 ## I am seeing host not found error in the logs. How do I fix it?
 
-This should be mainly a Podman only error: Using Podman doesn't create an engine-id like Docker.
-If you are using Docker check if the `engine-id` file exists with correct permissions in `/var/lib/docker` and has the UUID inside.
+This is mainly a Podman error. Podman is daemonless and tracks no engine identity, so its Docker-compatible `/info` endpoint returns a brand new random UUID on every call. Dozzle reads that ID once when it connects and uses it to identify the host, so every restart used to produce a different host, and the main server kept routing to an ID that no longer answered.
 
-To resolve the error take following steps:
+Dozzle now derives a stable ID on Podman from the hostname and the container storage path, so this should fix itself once both the server and the agents are updated. If you are still seeing it, restart the main Dozzle server so it picks up the new IDs.
 
-1. Create the folders: `mkdir -p /var/lib/docker`
-2. Install uuidgen if necessary
-3. Using uuidgen generate a UUID: `uuidgen > engine-id`
+> [!WARNING]
+> Earlier versions of this page told you to create `/var/lib/docker/engine-id`. That never had any effect on Podman, which reads no file for this. You can safely delete it.
 
-The engine-id file should now have a UUID inside.
+If you are using Docker rather than Podman, check that `engine-id` exists in `/var/lib/docker` with a UUID inside and is readable by the Docker daemon.
 
-An example setup for Ansible can be found in [Podman](/guide/podman)
+Two Podman hosts that share both a hostname and a storage path will still collide, since that is all Podman gives Dozzle to work with. Set `DOZZLE_HOST_ID` on one of them to break the tie:
 
-It might be necessary to clean up your existing Dozzle deployment under Podman, stop the container and remove the associated data (container/volumes). After that you can redeploy the Dozzle container and your logs should now show up.
+```sh
+podman run -e DOZZLE_HOST_ID=web-01 ...
+```
+
+See the [Podman guide](/guide/podman) for the full setup.
 
 ## Why am I only seeing running containers? How do I see stopped containers?
 
@@ -165,19 +170,17 @@ By default, Dozzle only shows running containers. To see stopped containers, you
 
 In single-user mode, Dozzle stores the settings in the browser's local storage. This means that the settings are only available on the browser where they were set. For Dozzle to enable syncing settings across multiple instances, it needs to know who the user is. In multi-user mode, Dozzle uses the user's username to store the settings on disk and sync them across multiple instances. This information is stored in `/data` directory. If you want to sync settings across multiple instances, you need to [enable](/guide/authentication) multi-user mode and provide a username.
 
-## Why doesn't Dozzle support notifications for Slack, Discord, Telegram, email, etc. directly?
+## How do I send Dozzle alerts to Slack, Discord, Telegram, or email?
 
-By design, Dozzle is unopinionated about where your alerts go. Instead of bundling integrations for specific notification platforms, Dozzle provides **webhooks** with customizable payload templates. This means you can send alerts to _any_ service that accepts HTTP requests — Slack, Discord, Telegram, ntfy, PagerDuty, Opsgenie, or your own internal tools — without waiting for Dozzle to add explicit support.
+Dozzle sends alerts through **webhooks**, and ships ready-made payload templates for Slack, Discord, and ntfy. Telegram, PagerDuty, Opsgenie, or any other service that accepts an HTTP request works the same way with a custom template. Dozzle has no built-in email sender; email delivery comes with [Dozzle Cloud](/guide/dozzle-cloud). Setup is in [Alerts & Webhooks](/guide/alerts-and-webhooks).
 
-There are a few reasons for this approach:
+Dozzle uses webhooks instead of one integration per provider on purpose:
 
 - **Universality.** Webhooks work with virtually every notification platform. Adding provider-specific integrations would cover only a fraction of what users need, while webhooks cover all of them.
 - **Maintenance.** Each provider integration brings its own API quirks, authentication flows, rate limits, and breaking changes. Supporting them means Dozzle maintainers become responsible for debugging issues with third-party services — which is outside the scope of a log viewer.
 - **Simplicity.** Dozzle is a lightweight, focused tool for viewing Docker logs. Keeping the notification layer generic keeps the codebase small and the project sustainable.
 
 If you need a more opinionated experience with richer provider integrations (e.g., web push notifications, ntfy action buttons), [Dozzle Cloud](/guide/dozzle-cloud) is designed for that.
-
-For setting up webhooks with your preferred service, see the [Alerts & Webhooks](/guide/alerts-and-webhooks) guide — it includes built-in payload templates for Slack, Discord, and ntfy that you can use as-is or customize.
 
 ## Why does Dozzle keep dockerd and containerd at slightly elevated CPU when no browser is connected?
 

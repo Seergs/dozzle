@@ -3,6 +3,17 @@ export type Host = {
   name: string;
   nCPU: number;
   memTotal: number;
+  metricsAvailable?: boolean;
+  load1?: number;
+  load5?: number;
+  load15?: number;
+  uptime?: number;
+  diskTotal?: number;
+  diskFree?: number;
+  // extra drives mounted under /host/disks/<name>; diskTotal/diskFree stay Docker's own
+  disks?: { name: string; total: number; free: number }[];
+  // what `docker system df` calls reclaimable; null until the first volume walk
+  reclaimable?: Reclaimable | null;
   type: "agent" | "local" | "remote" | "swarm" | "k8s";
   endpoint: string;
   available: boolean;
@@ -10,7 +21,33 @@ export type Host = {
   runtime?: "docker" | "podman";
   agentVersion: string;
   group?: string;
+  // set when the server re-keyed this host because its agent came back under a
+  // new id, so we drop the entry it used to live under instead of listing the
+  // same machine twice
+  replacesId?: string;
+  // set on the one update sent when an agent is removed, so every tab drops it
+  removed?: boolean;
 };
+
+// space held by things no container is using, counts and bytes per kind
+export type Reclaimable = {
+  images: number;
+  imagesSize: number;
+  volumes: number;
+  volumesSize: number;
+  containers: number;
+  containersSize: number;
+  buildCacheSize: number;
+};
+
+// What a clean up of images and volumes would delete, from /api/hosts/{id}/reclaimable.
+export type ReclaimableItems = {
+  images: { id: string; tags: string[]; size: number }[];
+  volumes: { name: string; size: number; created: string }[];
+};
+
+export type ReclaimablePreview =
+  { status: "idle" | "loading" } | { status: "ready"; items: ReclaimableItems } | { status: "error"; error: string };
 
 const hosts = ref(
   config.hosts
@@ -25,13 +62,47 @@ const hosts = ref(
 );
 const updateHost = (host: Host) => {
   delete hosts.value[host.endpoint];
+  if (host.replacesId) {
+    delete hosts.value[host.replacesId];
+  }
   hosts.value[host.id] = host;
   return host;
+};
+
+export type HostMetrics = Pick<
+  Host,
+  | "id"
+  | "metricsAvailable"
+  | "load1"
+  | "load5"
+  | "load15"
+  | "uptime"
+  | "diskTotal"
+  | "diskFree"
+  | "disks"
+  | "reclaimable"
+>;
+
+// Merges a host-metrics tick into the host already known, leaving available and
+// type alone. A tick for a host this tab has not heard of yet is dropped.
+const updateHostMetrics = ({ id, ...metrics }: HostMetrics) => {
+  const host = hosts.value[id];
+  if (host) Object.assign(host, metrics);
+};
+
+// An agent that never connected is listed under its endpoint, so both keys are
+// cleared. Other tabs hear about it as an update-host with removed set.
+const removeHost = (...ids: (string | undefined)[]) => {
+  for (const id of ids) {
+    if (id) delete hosts.value[id];
+  }
 };
 
 export function useHosts() {
   return {
     hosts,
     updateHost,
+    updateHostMetrics,
+    removeHost,
   };
 }

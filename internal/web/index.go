@@ -1,36 +1,141 @@
 package web
 
 import (
+	"bytes"
+	"compress/gzip"
 	"html/template"
 	"io"
+	"io/fs"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 
 	"encoding/json"
 
 	"net/http"
+	"net/url"
+	"os"
 	"path"
 
 	"github.com/amir20/dozzle/internal/auth"
 	"github.com/amir20/dozzle/internal/profile"
+	"github.com/andybalholm/brotli"
 	"github.com/rs/zerolog/log"
 )
 
 func (h *handler) index(w http.ResponseWriter, req *http.Request) {
-	path := req.URL.Path
-	_, err := h.content.Open(path)
-	if err == nil && req.URL.Path != "" && req.URL.Path != "/" {
-		w.Header().Set("Cache-Control", "max-age=31536000, immutable")
-		fileServer.ServeHTTP(w, req)
-	} else {
-		h.executeTemplate(w, req)
+	if path := req.URL.Path; path != "" && path != "/" && h.serveAsset(w, req, path) {
+		return
 	}
+	h.executeTemplate(w, req)
+}
+
+// serveAsset serves a built asset, reporting whether it handled the request; anything
+// unknown falls through to the SPA template. Text assets exist only as the `.br`
+// sibling written by scripts/compress-dist.js, so they are served as-is to a client that
+// accepts brotli, re-encoded as gzip for one that only takes that, and inflated otherwise.
+func (h *handler) serveAsset(w http.ResponseWriter, req *http.Request, name string) bool {
+	if file, err := h.content.Open(name); err == nil {
+		file.Close()
+		w.Header().Set("Cache-Control", cacheControlFor(name))
+		fileServer.ServeHTTP(w, req)
+		return true
+	}
+
+	file, err := h.content.Open(name + ".br")
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	w.Header().Set("Cache-Control", cacheControlFor(name))
+	w.Header().Set("Content-Type", contentTypeFor(name))
+	w.Header().Add("Vary", "Accept-Encoding")
+
+	if acceptsBrotli(req) {
+		w.Header().Set("Content-Encoding", "br")
+		if stat, err := file.Stat(); err == nil {
+			w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
+		}
+		io.Copy(w, file)
+		return true
+	}
+
+	if acceptsGzip(req) {
+		w.Header().Set("Content-Encoding", "gzip")
+		if gz, ok := gzipped(name, file); ok {
+			w.Header().Set("Content-Length", strconv.Itoa(len(gz)))
+			w.Write(gz)
+			return true
+		}
+		gw := gzip.NewWriter(w)
+		defer gw.Close()
+		io.Copy(gw, brotli.NewReader(file))
+		return true
+	}
+
+	io.Copy(w, brotli.NewReader(file))
+	return true
+}
+
+// Chrome and Firefox only offer brotli over HTTPS, so anyone opening Dozzle at
+// http://<lan-ip> asks for gzip. Inflating to identity sent every chunk at full size,
+// several times what br would be. Each asset is re-encoded once on first request and
+// kept, since the set is fixed for the life of the binary. Anything whose `.br` is
+// bigger than maxCachedGzip (the duckdb wasm) is gzipped on the fly instead of held.
+const maxCachedGzip = 1 << 20
+
+var gzipCache sync.Map // asset name -> []byte
+
+func gzipped(name string, file fs.File) ([]byte, bool) {
+	if cached, ok := gzipCache.Load(name); ok {
+		return cached.([]byte), true
+	}
+	if stat, err := file.Stat(); err != nil || stat.Size() > maxCachedGzip {
+		return nil, false
+	}
+
+	var buf bytes.Buffer
+	gw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if _, err := io.Copy(gw, brotli.NewReader(file)); err != nil {
+		return nil, false
+	}
+	if err := gw.Close(); err != nil {
+		return nil, false
+	}
+	cached, _ := gzipCache.LoadOrStore(name, buf.Bytes())
+	return cached.([]byte), true
 }
 
 func (h *handler) executeTemplate(w http.ResponseWriter, req *http.Request) {
 	base := ""
 	if h.config.Base != "/" {
 		base = h.config.Base
+	}
+
+	// The shell carries the session's config as inline JSON and names this build's
+	// hashed chunks, so it can never be reused. It had no cache headers at all,
+	// and a response with no Cache-Control, no ETag and no Last-Modified is one a
+	// browser may hold under heuristic freshness. An iOS home screen app relaunching
+	// days later then re-rendered a shell that still claimed a signed-in user and
+	// pointed at chunks the last upgrade deleted: nothing mounts, and standalone
+	// mode has no error page to say why. Set before the login redirect too, so that
+	// is not what gets held instead.
+	w.Header().Set("Cache-Control", "no-store")
+
+	// The MCP consent page is one click from handing a client a token, so it
+	// must not load inside someone else's frame. The rest of the app stays
+	// embeddable, which people rely on.
+	// vue-router matches case-insensitively and with a trailing slash, so the
+	// check covers every spelling that renders the page.
+	if strings.HasPrefix(strings.ToLower(strings.TrimPrefix(req.URL.Path, "/")), "mcp/") {
+		w.Header().Set("X-Frame-Options", "DENY")
+		if csp := w.Header().Get("Content-Security-Policy"); csp != "" {
+			w.Header().Set("Content-Security-Policy", csp+" frame-ancestors 'none';")
+		} else {
+			w.Header().Set("Content-Security-Policy", "frame-ancestors 'none';")
+		}
 	}
 
 	user := auth.UserFromContext(req.Context())
@@ -46,17 +151,47 @@ func (h *handler) executeTemplate(w http.ResponseWriter, req *http.Request) {
 			}
 			http.Error(w, "Unauthorized user", http.StatusUnauthorized)
 			return
-		case SIMPLE:
+		case SIMPLE, OIDC:
 			if req.URL.Path != "login" {
 				log.Debug().Str("url", req.URL.String()).Msg("Redirecting to login page")
-				http.Redirect(w, req, path.Clean(h.config.Base+"/login")+"?redirectUrl=/"+req.URL.String(), http.StatusTemporaryRedirect)
+				// The login page navigates to whatever comes back in redirectUrl, so
+				// this has to be a plain relative path. A request for "//evil.com"
+				// arrives here as a protocol-relative URL, which a browser follows
+				// off-origin.
+				target := auth.SafeRelativePath("/" + req.URL.String())
+				if target == "" {
+					target = "/"
+				}
+				login := path.Clean(h.config.Base+"/login") + "?" + url.Values{"redirectUrl": {target}}.Encode()
+				http.Redirect(w, req, login, http.StatusTemporaryRedirect)
 				return
 			}
 		}
 	}
 
+	// A signed-in user has nothing to do on the login page. A back swipe or a stale
+	// tab lands here after the session is already set, so send them on to where
+	// the login would have.
+	if user != nil && req.URL.Path == "login" {
+		target := auth.SafeRelativePath(req.URL.Query().Get("redirectUrl"))
+		if target == "" {
+			target = "/"
+		}
+		http.Redirect(w, req, base+target, http.StatusTemporaryRedirect)
+		return
+	}
+
 	config := map[string]any{
 		"base": base,
+	}
+
+	// The login page renders one button per provider while nobody is
+	// authenticated yet, so this sits outside the authorized block below. The
+	// assertion is false when no OAuth provider is configured, and on the nil
+	// Authorizer that provider "none" leaves behind.
+	if oauth, ok := h.config.Authorization.Authorizer.(OAuthAuthorizer); ok {
+		config["oauthProviders"] = oauth.Providers()
+		config["passwordLogin"] = oauth.PasswordLoginEnabled()
 	}
 
 	// Build full config when authorized (no auth or authenticated user)
@@ -72,25 +207,60 @@ func (h *handler) executeTemplate(w http.ResponseWriter, req *http.Request) {
 		config["mode"] = h.config.Mode
 		config["hosts"] = hosts
 		config["disableAvatars"] = h.config.DisableAvatars
+		config["disableSetupWizard"] = h.config.DisableSetupWizard
 		config["releaseCheckMode"] = h.config.ReleaseCheckMode
 		config["imageCheckMode"] = h.config.ImageCheckMode
 		config["enableShell"] = h.config.EnableShell
 		config["enableActions"] = h.config.EnableActions
+		config["enableUpdates"] = h.config.EnableActions
 		config["enableDownload"] = true
 		config["enableNotifications"] = true
 		config["enableCloud"] = true
+		config["canLinkCloud"] = true
+		// Runtime, not baked into the bundle, so pointing a dev instance at a
+		// local cloud is one env var on this process — same as DOLIGENCE_URL,
+		// which is the API half of the same override.
+		config["cloudUrl"] = cloudWebURL()
+		// Whether this instance is linked decides whether the page asks for the
+		// cloud status and the recent-alerts history at all, so fetching it was a
+		// round trip both of those queued behind: on an instance an ocean away
+		// nothing cloud-shaped started until two round trips after first paint.
+		// It comes out of memory here, so the shell may as well carry it.
+		config["cloudConfig"] = h.cloudConfigPayload()
+		config["dataPersisted"] = profile.Persisted()
+		// The page counts what only the browser sees and POSTs it; this keeps it from
+		// ever doing so under --no-analytics.
+		config["noAnalytics"] = h.config.NoAnalytics
+		// Decided here so the sidebar's "Add host" row costs no extra request.
+		if _, ok := h.agentService(); ok && h.config.Mode == "server" {
+			config["canAddHosts"] = h.setupCanWrite(req)
+		}
+		// Lets the page tell Dozzle's own container apart from other Dozzle
+		// containers, since updating it replaces the process serving the page.
+		if id := setupSelfID(); id != "" {
+			config["selfContainerId"] = id
+		}
 
 		if user != nil {
 			config["enableShell"] = h.config.EnableShell && user.Roles.Has(auth.Shell)
 			config["enableActions"] = h.config.EnableActions && user.Roles.Has(auth.Actions)
+			config["enableUpdates"] = h.config.EnableActions && user.Roles.Has(auth.Actions|auth.Update)
 			config["enableDownload"] = user.Roles.Has(auth.Download)
 			config["enableNotifications"] = user.Roles.Has(auth.Notifications)
-			config["enableCloud"] = user.Roles.Has(auth.Cloud)
+			// Reading cloud-backed data is open to anyone signed in and is
+			// confined to their own filter. The role only decides who may
+			// repoint the instance at a cloud account.
+			config["canLinkCloud"] = user.Roles.Has(auth.Cloud)
 			config["user"] = user
 		}
 
-		if h.config.Authorization.Provider == FORWARD_PROXY && strings.TrimSpace(h.config.Authorization.LogoutUrl) != "" {
-			config["logoutUrl"] = strings.TrimSpace(h.config.Authorization.LogoutUrl)
+		// Forward proxy has no session of its own to clear, so the URL is the
+		// whole logout. Under oidc the logout response says where to go, since
+		// it carries the session's ID token.
+		if h.config.Authorization.Provider == FORWARD_PROXY {
+			if logoutURL := strings.TrimSpace(h.config.Authorization.LogoutUrl); logoutURL != "" {
+				config["logoutUrl"] = logoutURL
+			}
 		}
 	}
 
@@ -105,11 +275,17 @@ func (h *handler) executeTemplate(w http.ResponseWriter, req *http.Request) {
 		config["profile"] = struct{}{}
 	}
 
+	manifest := h.readManifest()
+	entryJS, styles, preloads := entryAssets(manifest, entryModule)
+
 	data := map[string]any{
-		"Config":   config,
-		"Dev":      h.config.Dev,
-		"Manifest": h.readManifest(),
-		"Base":     base,
+		"Config":  config,
+		"Dev":     h.config.Dev,
+		"Vite":    viteDevURL(),
+		"Entry":   entryJS,
+		"Styles":  styles,
+		"Preload": preloads,
+		"Base":    base,
 	}
 	file, err := h.content.Open("index.html")
 	if err != nil {
@@ -139,6 +315,98 @@ func (h *handler) executeTemplate(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Could not execute index.html")
 	}
+}
+
+// viteDevURL is where the dev page loads the Vite client and the entry module from.
+// It is a runtime lookup rather than a constant so several worktrees can each run
+// `make dev` at once, every one on its own pair of ports.
+func viteDevURL() string {
+	if url := os.Getenv("VITE_URL"); url != "" {
+		return strings.TrimSuffix(url, "/")
+	}
+	port := os.Getenv("VITE_PORT")
+	if port == "" {
+		port = "5173"
+	}
+	return "http://localhost:" + port
+}
+
+// cacheControlFor keeps the year-long immutable cache for hashed files under assets/,
+// which can always be busted by a new name. The unhashed root files (favicon.png,
+// apple-touch-icon.png) cannot, so pinning them would strand a stale icon for a year.
+func cacheControlFor(name string) string {
+	if strings.HasPrefix(name, "assets/") {
+		return "max-age=31536000, immutable"
+	}
+	return "max-age=3600"
+}
+
+const entryModule = "assets/main.ts"
+
+// entryAssets resolves the entry chunk's script, every stylesheet it depends on, and
+// every other chunk in its static import graph.
+//
+// Vite splits scoped component CSS into its own chunk, and a chunk statically imported by
+// the entry gets no <link> of its own, so linking only the entry's `css` left those
+// stylesheets to whichever lazy page happened to import them. Deep linking to a page that
+// didn't (a container view) then rendered shared components unstyled until the user
+// navigated somewhere that pulled the chunk in.
+//
+// The same walk yields the modulepreload list. Vite emits those hints when it owns
+// index.html, but the page is a Go template served from public/, so without them the
+// browser only discovers a chunk after parsing the one that imports it, serializing the
+// graph into several round trips.
+func entryAssets(manifest map[string]any, entry string) (string, []string, []string) {
+	chunk, ok := manifest[entry].(map[string]any)
+	if !ok {
+		return "", nil, nil
+	}
+
+	file, _ := chunk["file"].(string)
+
+	seen := make(map[string]bool)
+	styles := make([]string, 0, 4)
+	preloads := make([]string, 0, 32)
+	var collect func(key string)
+	collect = func(key string) {
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+
+		chunk, ok := manifest[key].(map[string]any)
+		if !ok {
+			return
+		}
+
+		// The entry itself is already requested by the <script> tag.
+		if f, ok := chunk["file"].(string); ok && key != entry {
+			preloads = append(preloads, f)
+		}
+
+		// Imports first, matching the order Vite itself emits, so the entry's stylesheet
+		// (Tailwind's) keeps the last word in the cascade.
+		if imports, ok := chunk["imports"].([]any); ok {
+			for _, i := range imports {
+				if name, ok := i.(string); ok {
+					collect(name)
+				}
+			}
+		}
+
+		if css, ok := chunk["css"].([]any); ok {
+			for _, c := range css {
+				name, ok := c.(string)
+				if ok && !seen[name] {
+					seen[name] = true
+					styles = append(styles, name)
+				}
+			}
+		}
+	}
+	collect(entry)
+
+	return file, styles, preloads
 }
 
 func (h *handler) readManifest() map[string]any {

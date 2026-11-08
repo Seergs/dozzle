@@ -10,7 +10,7 @@ import (
 	"github.com/amir20/dozzle/types"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog/log"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // WriteConfig writes the current configuration to a writer in YAML format.
@@ -29,10 +29,12 @@ func (m *Manager) WriteConfig(w io.Writer) error {
 		Dispatchers:   dispatchers,
 	}
 
-	encoder := yaml.NewEncoder(w)
-	defer encoder.Close()
-
-	return encoder.Encode(config)
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(data)
+	return err
 }
 
 // LoadConfig reads configuration from a reader in YAML format and loads it
@@ -58,6 +60,7 @@ func (m *Manager) LoadConfig(r io.Reader) error {
 			EventExpression:     sub.EventExpression,
 			Cooldown:            sub.Cooldown,
 			SampleWindow:        sub.SampleWindow,
+			Immediate:           sub.Immediate,
 		}
 	}
 
@@ -128,6 +131,7 @@ func (m *Manager) HandleNotificationConfig(subscriptions []types.SubscriptionCon
 			EventExpression:     sub.EventExpression,
 			Cooldown:            sub.Cooldown,
 			SampleWindow:        sub.SampleWindow,
+			Immediate:           sub.Immediate,
 		}
 
 		if old, ok := existing[sub.ID]; ok {
@@ -182,7 +186,7 @@ func (m *Manager) HandleNotificationConfig(subscriptions []types.SubscriptionCon
 			Headers:  dc.Headers,
 		})
 		if err != nil {
-			log.Warn().Err(err).Str("name", dc.Name).Str("type", dc.Type).Msg("Skipping unknown dispatcher type")
+			log.Warn().Err(err).Str("name", dc.Name).Str("type", dc.Type).Msg("Skipping invalid dispatcher")
 			continue
 		}
 		m.dispatchers.Store(dc.ID, d)

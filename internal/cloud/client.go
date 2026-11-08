@@ -10,10 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/amir20/dozzle/internal/container"
 	"github.com/amir20/dozzle/internal/notification/dispatcher"
 	pb "github.com/amir20/dozzle/proto/cloud"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/semaphore"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -35,10 +37,17 @@ const (
 
 // Client manages the gRPC connection to Dozzle Cloud
 type Client struct {
-	deps           ToolDeps
-	apiKeyFunc     func() string
-	instanceID     string
-	version        string
+	deps       ToolDeps
+	apiKeyFunc func() string
+	instanceID string
+	version    string
+	// mode and swarmClusterID describe what kind of Dozzle process this is.
+	// Cloud cannot infer either — a swarm replica and a standalone server both
+	// scope themselves to their own daemon and look identical on the wire — so
+	// they travel as connect-time metadata. Both may be empty; cloud treats
+	// that as unknown.
+	mode           string
+	swarmClusterID string
 	streamLogsFunc func() bool
 	target         string
 	plaintext      bool
@@ -51,6 +60,10 @@ type Client struct {
 
 	connMu        sync.Mutex
 	cancelCurrent context.CancelFunc
+
+	// updateRecords is where pushed container updates are read from: nil is
+	// container.Updates. See update_pusher.go.
+	updateRecords *container.UpdateRecords
 
 	// unaryConn / unaryClient are lazily initialized and shared across every
 	// Dozzle-initiated unary call (SearchLogs, GetAlerts) so we don't pay the
@@ -100,6 +113,21 @@ func NewClient(apiKeyFunc func() string, instanceID string, version string, deps
 		streamSem:  semaphore.NewWeighted(maxConcurrentStreams),
 		startCh:    make(chan struct{}, 1),
 	}
+}
+
+// deploymentAgent is the mode a remote agent passes to SetDeployment.
+const deploymentAgent = "agent"
+
+// SetDeployment records what kind of Dozzle process this is ("server",
+// "swarm", "k8s" or "agent") and, on a swarm node, which swarm it belongs to.
+// Sent as connect-time metadata so Dozzle Cloud can tell a hub from the agents
+// behind it, and a replicated swarm from one API key reused across deployments.
+//
+// Optional: a client that never calls this simply reports nothing, which is
+// what every Dozzle before this change did.
+func (c *Client) SetDeployment(mode, swarmClusterID string) {
+	c.mode = mode
+	c.swarmClusterID = swarmClusterID
 }
 
 // SetStreamLogsFunc registers a function that reports whether bulk container
@@ -168,6 +196,26 @@ func (c *Client) Run(ctx context.Context) {
 		}
 
 		if err != nil {
+			// Cloud decides how long to wait when it says so; the cases below are
+			// only the defaults for a cloud that doesn't.
+			if delay, ok := retryDelay(err); ok {
+				log.Warn().Err(err).Dur("retry_after", delay).Msg("cloud rejected connection, retrying when cloud asked")
+				// Jitter keeps instances refused together from retrying in lockstep;
+				// the floor keeps a bad hint from becoming a tight loop.
+				delay = max(delay, initialBackoff)
+				backoffTimer.Reset(delay + time.Duration(float64(delay)*jitterFraction*rand.Float64()))
+				select {
+				case <-ctx.Done():
+					return
+				case <-backoffTimer.C:
+				case <-c.startCh:
+					if !backoffTimer.Stop() {
+						<-backoffTimer.C
+					}
+				}
+				backoff = initialBackoff
+				continue
+			}
 			if isPermissionDenied(err) {
 				log.Debug().Msg("cloud account does not have pro plan, waiting for upgrade")
 				select {
@@ -254,6 +302,12 @@ func (c *Client) connect(ctx context.Context, apiKey string) (wasConnected bool,
 	if c.instanceID != "" {
 		mdPairs = append(mdPairs, "x-instance-id", c.instanceID)
 	}
+	if c.mode != "" {
+		mdPairs = append(mdPairs, "x-dozzle-mode", c.mode)
+	}
+	if c.swarmClusterID != "" {
+		mdPairs = append(mdPairs, "x-dozzle-swarm-cluster-id", c.swarmClusterID)
+	}
 	md := metadata.Pairs(mdPairs...)
 	streamCtx := metadata.NewOutgoingContext(connCtx, md)
 
@@ -282,7 +336,7 @@ func (c *Client) connect(ctx context.Context, apiKey string) (wasConnected bool,
 	if !streamLogs {
 		log.Debug().Msg("cloud log streaming disabled by user setting; skipping streamer")
 	} else if lshs, ok := c.deps.HostService.(LogStreamHostService); ok {
-		streamer := newLogStreamer(lshs, c.deps.Labels, sendResp)
+		streamer := newLogStreamer(lshs, c.deps.Principal.Labels, sendResp)
 		wg.Go(func() {
 			streamer.run(streamLifetime)
 		})
@@ -295,13 +349,36 @@ func (c *Client) connect(ctx context.Context, apiKey string) (wasConnected bool,
 	// their containers' resource usage too.
 	if streamLogs {
 		if sshs, ok := c.deps.HostService.(StatsStreamHostService); ok {
-			stats := newStatsStreamer(sshs, c.deps.Labels, sendResp)
+			stats := newStatsStreamer(sshs, c.deps.Principal.Labels, sendResp)
 			wg.Go(func() {
 				stats.run(streamLifetime)
 			})
 		} else {
 			log.Debug().Msg("host service does not support stats streaming; skipping")
 		}
+	}
+
+	// Container updates are not log content, so the log-streaming toggle does
+	// not apply: which updates may be sent is decided in update_pusher.go. An
+	// agent records none (the server that asked for an update records it), so
+	// it has nothing to push.
+	if c.mode != deploymentAgent {
+		records := c.updateRecords
+		if records == nil {
+			records = container.Updates
+		}
+		wg.Go(func() {
+			pushUpdates(streamLifetime, records, sendResp)
+		})
+	}
+
+	// Container config is not log content either: what may be sent is decided
+	// in config_pusher.go, and secrets never are. Which hosts are sent is
+	// ConfigHostService: each agent sends its own, and the server the rest.
+	if chs := c.deps.ConfigHostService; chs != nil {
+		wg.Go(func() {
+			pushConfigs(streamLifetime, chs, c.deps.Principal.Labels, sendResp)
+		})
 	}
 
 	defer func() {
@@ -380,15 +457,28 @@ func (c *Client) connect(ctx context.Context, apiKey string) (wasConnected bool,
 		// so bursts (e.g. the LLM firing 25 remove_container calls at once) run
 		// serially enough that Docker doesn't buckle. Acquire blocks inside the
 		// goroutine so the recv loop keeps processing cancel_stream requests.
-		if _, ok := req.Type.(*pb.ToolRequest_CallTool); ok {
+		//
+		// Each call gets its own context: bounded by toolCallTimeout, and
+		// registered under its request id so a cancel_stream for it ends it.
+		// Before this a call ran on the stream's lifetime, so one the cloud had
+		// stopped waiting for kept reading — a whole day of a chatty container
+		// — and kept its slot, and every later call queued behind it.
+		if callReq, ok := req.Type.(*pb.ToolRequest_CallTool); ok {
+			callCtx, callCancel := context.WithTimeout(streamLifetime, toolCallTimeout(callReq.CallTool.Name))
+			c.activeStreams.Store(req.RequestId, callCancel)
+			reqID := req.RequestId
 			wg.Go(func() {
-				if err := c.toolSem.Acquire(streamLifetime, 1); err != nil {
+				defer func() {
+					c.activeStreams.Delete(reqID)
+					callCancel()
+				}()
+				if err := c.toolSem.Acquire(callCtx, 1); err != nil {
 					return
 				}
 				defer c.toolSem.Release(1)
-				resp := c.handleRequest(streamLifetime, req)
-				if streamLifetime.Err() != nil {
-					return
+				resp := c.handleRequest(callCtx, req)
+				if streamLifetime.Err() != nil || errors.Is(callCtx.Err(), context.Canceled) {
+					return // the stream is gone, or the cloud cancelled: nobody is waiting
 				}
 				if err := sendResp(resp); err != nil {
 					log.Debug().Err(err).Msg("failed to send tool response")
@@ -443,11 +533,51 @@ func (c *Client) handleRequest(ctx context.Context, req *pb.ToolRequest) *pb.Too
 	return resp
 }
 
+// toolCallTimeout bounds one unary tool call. retro_scan carries its own
+// deadline (at most retroMaxDeadline) and gets a margin past it; everything
+// else is interactive and has no business running for minutes.
+func toolCallTimeout(name string) time.Duration {
+	switch name {
+	case toolRetroScan:
+		return retroMaxDeadline + 30*time.Second
+	case toolUpdateContainer:
+		// Pulls the image on this context: a multi-GB image on a slow link
+		// takes a long time, and had no bound at all before calls got one.
+		// Still cancellable by request id, which is what frees the slot.
+		return 30 * time.Minute
+	case toolRollbackContainer:
+		// Pulls nothing, but the swap waits for the previous image to stay up
+		// and, with a healthcheck, healthy, which can take minutes.
+		return 10 * time.Minute
+	}
+	return 2 * time.Minute
+}
+
 func (c *Client) tools() []*pb.ToolDefinition {
 	c.toolsOnce.Do(func() {
-		c.cachedTools = AvailableTools(c.deps.EnableActions)
+		c.cachedTools = AvailableTools(c.deps)
 	})
 	return c.cachedTools
+}
+
+// retryDelay returns the wait cloud attached to a failed stream as a RetryInfo
+// detail, whatever the status code.
+func retryDelay(err error) (time.Duration, bool) {
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		s, ok := status.FromError(e)
+		if !ok {
+			continue
+		}
+		for _, d := range s.Details() {
+			if ri, ok := d.(*errdetails.RetryInfo); ok && ri.GetRetryDelay() != nil {
+				if delay := ri.GetRetryDelay().AsDuration(); delay > 0 {
+					return delay, true
+				}
+			}
+		}
+		return 0, false
+	}
+	return 0, false
 }
 
 func isPermissionDenied(err error) bool {

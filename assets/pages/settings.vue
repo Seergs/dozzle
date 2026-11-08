@@ -1,334 +1,147 @@
 <template>
-  <div class="@container flex flex-col gap-8 px-4 py-4 md:px-8">
+  <div class="@container flex flex-col gap-6 p-4 md:px-8">
     <section>
-      <Links>
-        <template #more-items>
-          <Tag class="font-mono">{{ config.version }}</Tag>
+      <Links />
+    </section>
+
+    <!-- Reset stays beside the title, so on a phone it does not drop under the subtitle. -->
+    <div class="flex items-start justify-between gap-4">
+      <div class="min-w-0">
+        <h1 class="text-2xl font-bold">{{ $t("title.settings") }}</h1>
+        <!-- Every page says whose settings these are, so the nav never moves between pages. -->
+        <p class="text-base-content/60 text-sm">
+          {{ isPreferencePage(route.path) ? $t("settings.subtitle") : $t("settings.subtitle-server") }}
+        </p>
+      </div>
+      <button
+        v-if="isPreferencePage(route.path)"
+        type="button"
+        class="btn btn-ghost btn-xs text-base-content/60 mt-1.5 shrink-0"
+        @click="reset"
+      >
+        {{ $t("settings.reset") }}
+      </button>
+    </div>
+
+    <!-- On a phone the nav folds into a row of chips above the page. -->
+    <nav
+      ref="chipsEl"
+      role="tablist"
+      class="tabs tabs-box tabs-sm flex-nowrap overflow-x-auto @3xl:hidden"
+      :style="chipsMask"
+      :aria-label="$t('title.settings')"
+    >
+      <router-link
+        v-for="item in pages"
+        :key="item.id"
+        :to="item.to"
+        role="tab"
+        class="tab shrink-0 whitespace-nowrap"
+        active-class="tab-active"
+      >
+        {{ item.label }}
+      </router-link>
+    </nav>
+
+    <div class="flex items-start gap-10">
+      <!-- The preferences for this browser, then what is about the server, then what this
+           install is, each group after a hairline. -->
+      <ul class="menu sticky top-4 hidden w-48 shrink-0 p-0 @3xl:flex" :aria-label="$t('title.settings')">
+        <template v-for="item in pages" :key="item.id">
+          <li v-if="item.divider"></li>
+          <li>
+            <router-link :to="item.to" active-class="menu-active">
+              <component :is="item.icon" class="size-4 opacity-60" />
+              <span class="flex-1">{{ item.label }}</span>
+              <span v-if="item.id === 'about' && hasRelease" class="status status-warning"></span>
+            </router-link>
+          </li>
         </template>
-      </Links>
-    </section>
+      </ul>
 
-    <!-- ABOUT -->
-    <section class="flex flex-col gap-4">
-      <div>
-        <h2 class="text-2xl font-semibold tracking-tight">{{ $t("settings.about") }}</h2>
-        <p class="text-base-content/60 mt-1 text-sm">{{ $t("settings.about-desc") }}</p>
+      <div class="flex max-w-4xl min-w-0 flex-1 flex-col gap-8">
+        <SetupRestartBanner v-if="setupStatus" :status="setupStatus" />
+        <RouterView />
       </div>
-
-      <div class="divide-base-content/10 divide-y">
-        <div class="flex flex-col gap-2 py-4">
-          <div class="flex flex-wrap items-center gap-3">
-            <span class="text-2xl font-semibold tracking-tight">Dozzle</span>
-            <span class="status-pill status-pill-neutral font-mono">{{ config.version }}</span>
-            <a
-              v-if="hasRelease"
-              :href="latestRelease?.htmlUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="status-pill status-pill-warning hover:bg-warning/15"
-            >
-              <span class="size-1.5 rounded-full bg-current"></span>
-              {{ latestRelease?.name }} available
-            </a>
-          </div>
-          <div class="text-base-content/60 font-mono text-xs">
-            <template v-if="hasRelease && latestRelease?.createdAt">
-              Latest release {{ latestRelease.name }} ·
-              {{ new Date(latestRelease.createdAt).toLocaleDateString(undefined, dateFmt) }}
-            </template>
-            <template v-else>You're running the latest version.</template>
-          </div>
-        </div>
-
-        <div class="flex flex-col gap-3 py-4">
-          <div>
-            <div class="text-sm font-medium">{{ $t("settings.support-title") }}</div>
-            <div class="text-base-content/60 text-xs">{{ $t("settings.help-support") }}</div>
-          </div>
-          <div class="flex flex-wrap gap-2">
-            <a href="https://github.com/amir20/dozzle" target="_blank" rel="noopener noreferrer" class="btn btn-sm">
-              <mdi:github /> amir20/dozzle
-            </a>
-            <a
-              href="https://github.com/sponsors/amir20"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="btn btn-primary btn-sm"
-            >
-              <mdi:heart /> Sponsor on GitHub
-            </a>
-            <a
-              href="https://buymeacoffee.com/amirraminfar"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="btn btn-sm"
-            >
-              <mdi:beer /> Buy me a beer
-            </a>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- CLOUD -->
-    <section class="flex flex-col gap-4" v-if="config.enableCloud">
-      <div>
-        <h2 class="text-2xl font-semibold tracking-tight">{{ $t("cloud.title") }}</h2>
-        <p class="text-base-content/60 mt-1 text-sm">{{ $t("settings.cloud-desc") }}</p>
-      </div>
-      <CloudSettingsCard />
-    </section>
-
-    <!-- DISPLAY -->
-    <section class="flex flex-col gap-4">
-      <div>
-        <h2 class="text-2xl font-semibold tracking-tight">{{ $t("settings.display") }}</h2>
-        <p class="text-base-content/60 mt-1 text-sm">{{ $t("settings.display-desc") }}</p>
-      </div>
-
-      <div class="grid items-stretch gap-3 @3xl:grid-cols-2">
-        <div class="divide-base-content/10 divide-y">
-          <SettingRow tag="label" :label="$t('settings.compact')" :description="$t('settings.compact-desc')">
-            <input type="checkbox" class="toggle toggle-primary toggle-sm" v-model="compact" />
-          </SettingRow>
-          <SettingRow
-            tag="label"
-            :label="$t('settings.small-scrollbars')"
-            :description="$t('settings.small-scrollbars-desc')"
-          >
-            <input type="checkbox" class="toggle toggle-primary toggle-sm" v-model="smallerScrollbars" />
-          </SettingRow>
-          <SettingRow
-            tag="label"
-            :label="$t('settings.show-timestamps')"
-            :description="$t('settings.show-timestamps-desc')"
-          >
-            <input type="checkbox" class="toggle toggle-primary toggle-sm" v-model="showTimestamp" />
-          </SettingRow>
-          <SettingRow tag="label" :label="$t('settings.show-std')" :description="$t('settings.show-std-desc')">
-            <input type="checkbox" class="toggle toggle-primary toggle-sm" v-model="showStd" />
-          </SettingRow>
-          <SettingRow tag="label" :label="$t('settings.soft-wrap')" :description="$t('settings.soft-wrap-desc')">
-            <input type="checkbox" class="toggle toggle-primary toggle-sm" v-model="softWrap" />
-          </SettingRow>
-          <SettingRow :label="$t('settings.datetime-format')" :description="$t('settings.datetime-format-desc')">
-            <DropdownMenu
-              v-model="dateLocale"
-              :options="[
-                { label: 'Auto', value: 'auto' },
-                { label: 'MM/DD/YYYY', value: 'en-US' },
-                { label: 'DD/MM/YYYY', value: 'en-GB' },
-                { label: 'DD.MM.YYYY', value: 'de-DE' },
-                { label: 'YYYY-MM-DD', value: 'en-CA' },
-              ]"
-            />
-            <DropdownMenu
-              v-model="hourStyle"
-              :options="[
-                { label: $t('settings.hour.auto'), value: 'auto' },
-                { label: $t('settings.hour.12'), value: '12' },
-                { label: $t('settings.hour.24'), value: '24' },
-              ]"
-            />
-          </SettingRow>
-          <SettingRow :label="$t('settings.font-size')" :description="$t('settings.font-size-desc')">
-            <span class="join">
-              <button
-                v-for="opt in [
-                  { label: $t('settings.size.small'), value: 'small' },
-                  { label: $t('settings.size.medium'), value: 'medium' },
-                  { label: $t('settings.size.large'), value: 'large' },
-                ]"
-                :key="opt.value"
-                class="btn btn-sm join-item"
-                :class="size === opt.value ? 'btn-primary' : 'btn-ghost'"
-                @click="size = opt.value as typeof size"
-              >
-                {{ opt.label }}
-              </button>
-            </span>
-          </SettingRow>
-        </div>
-
-        <LogList
-          :messages="fakeMessages"
-          :last-selected-item="undefined"
-          :show-container-name="false"
-          class="border-base-content/15 hidden h-full overflow-hidden rounded-lg border @3xl:block"
-        />
-      </div>
-    </section>
-
-    <!-- OPTIONS -->
-    <section class="flex flex-col gap-4">
-      <div>
-        <h2 class="text-2xl font-semibold tracking-tight">{{ $t("settings.options") }}</h2>
-        <p class="text-base-content/60 mt-1 text-sm">{{ $t("settings.options-desc") }}</p>
-      </div>
-
-      <div class="divide-base-content/10 divide-y">
-        <SettingRow :label="$t('settings.locale')" :description="$t('settings.locale-desc')">
-          <DropdownMenu
-            v-model="locale"
-            :options="[
-              { label: 'Auto', value: '' },
-              ...availableLocales.map((l) => ({ label: l.toLocaleUpperCase(), value: l })),
-            ]"
-          />
-        </SettingRow>
-        <SettingRow :label="$t('settings.color-scheme')" :description="$t('settings.color-scheme-desc')">
-          <span class="join">
-            <button
-              v-for="opt in [
-                { label: $t('settings.theme.light'), value: 'light' },
-                { label: $t('settings.theme.dark'), value: 'dark' },
-                { label: $t('settings.theme.auto'), value: 'auto' },
-              ]"
-              :key="opt.value"
-              class="btn btn-sm join-item"
-              :class="lightTheme === opt.value ? 'btn-primary' : 'btn-ghost'"
-              @click="lightTheme = opt.value as typeof lightTheme"
-            >
-              {{ opt.label }}
-            </button>
-          </span>
-        </SettingRow>
-        <SettingRow :label="$t('settings.automatic-redirect')" :description="$t('settings.automatic-redirect-desc')">
-          <DropdownMenu
-            v-model="automaticRedirect"
-            :options="[
-              { label: $t('settings.redirect.instant'), value: 'instant' },
-              { label: $t('settings.redirect.delayed'), value: 'delayed' },
-              { label: $t('settings.redirect.none'), value: 'none' },
-            ]"
-          />
-        </SettingRow>
-        <SettingRow :label="$t('settings.group-containers')" :description="$t('settings.group-containers-desc')">
-          <DropdownMenu
-            v-model="groupContainers"
-            :options="[
-              { label: $t('settings.grouping.always'), value: 'always' },
-              { label: $t('settings.grouping.at-least-2'), value: 'at-least-2' },
-              { label: $t('settings.grouping.never'), value: 'never' },
-            ]"
-          />
-        </SettingRow>
-        <SettingRow
-          v-if="config.imageCheckMode !== 'off'"
-          tag="label"
-          :label="$t('settings.show-image-update-alert')"
-          :description="$t('settings.show-image-update-alert-desc')"
-        >
-          <input type="checkbox" class="toggle toggle-primary toggle-sm" v-model="showImageUpdateAlert" />
-        </SettingRow>
-        <SettingRow tag="label" :label="$t('settings.search')" :description="$t('settings.search-desc')">
-          <template #label-suffix><key-shortcut char="f" /></template>
-          <input type="checkbox" class="toggle toggle-primary toggle-sm" v-model="search" />
-        </SettingRow>
-        <SettingRow
-          tag="label"
-          :label="$t('settings.show-stopped-containers')"
-          :description="$t('settings.show-stopped-containers-desc')"
-        >
-          <input type="checkbox" class="toggle toggle-primary toggle-sm" v-model="showAllContainers" />
-        </SettingRow>
-        <SettingRow
-          tag="label"
-          :label="$t('settings.show-app-icons')"
-          :description="$t('settings.show-app-icons-desc')"
-        >
-          <input type="checkbox" class="toggle toggle-primary toggle-sm" v-model="showAppIcons" />
-        </SettingRow>
-      </div>
-    </section>
+    </div>
   </div>
 </template>
 
 <script lang="ts" setup>
-import { ComplexLogEntry, SimpleLogEntry, GroupedLogEntry } from "@/models/LogEntry";
-
+import { settings, DEFAULT_SETTINGS, type Settings } from "@/stores/settings";
 import {
-  automaticRedirect,
-  compact,
-  hourStyle,
-  dateLocale,
-  lightTheme,
-  search,
-  showAllContainers,
-  showStd,
-  showTimestamp,
-  size,
-  smallerScrollbars,
-  softWrap,
-  locale,
-  groupContainers,
-  showImageUpdateAlert,
-  showAppIcons,
-} from "@/stores/settings";
-
-import { availableLocales, i18n } from "@/modules/i18n";
+  isPreferencePage,
+  settingsPages,
+  SERVER_PAGES,
+  SETTINGS_PAGE_ICONS,
+  SETTINGS_PAGE_LABELS,
+} from "@/composable/app/settingsPages";
 
 const { t } = useI18n();
 
 setTitle(t("title.settings"));
-const { latestRelease, hasRelease } = useAnnouncements();
+const { hasRelease } = useAnnouncements();
+// Every server page and the restart banner read the setup status, so the layout
+// fetches it once instead of each page asking. The API only exists in server mode.
+const { status: setupStatus, fetchStatus } = useSetup();
+if (config.mode === "server" && !setupStatus.value) fetchStatus();
 
-const dateFmt: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "numeric" };
+const visible = settingsPages(config);
+const pages = computed(() => {
+  // A hairline opening each group: the server pages, then About.
+  const server = visible.find((id) => SERVER_PAGES.includes(id));
+  return visible.map((id) => ({
+    id,
+    to: `/settings/${id}` as const,
+    label: t(SETTINGS_PAGE_LABELS[id]),
+    icon: SETTINGS_PAGE_ICONS[id],
+    divider: id === server || id === "about",
+  }));
+});
 
-const now = new Date();
-const hoursAgo = (hours: number) => {
-  const date = new Date(now);
-  date.setHours(date.getHours() - hours);
-  return date;
+// The chip row scrolls sideways, so a page opened from a link (About, Security) can sit
+// past the edge. Bring the active chip into view whenever the page changes.
+const route = useRoute();
+const chipsEl = useTemplateRef("chipsEl");
+const revealActiveChip = () =>
+  chipsEl.value?.querySelector(".tab-active")?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+watch(() => route.path, revealActiveChip, { flush: "post" });
+onMounted(revealActiveChip);
+
+// A chip cut by the edge read as a rendering bug, so each side that has more to
+// scroll fades out instead.
+const { arrivedState } = useScroll(chipsEl);
+const chipsMask = computed(() => {
+  const start = arrivedState.left ? "0px" : "1.5rem";
+  const end = arrivedState.right ? "0px" : "1.5rem";
+  return {
+    maskImage: `linear-gradient(to right, transparent, #000 ${start}, #000 calc(100% - ${end}), transparent)`,
+  };
+});
+
+// Only the preferences these pages show. Nav width and collapsed panels are layout
+// state the user set somewhere else and would not expect a reset here to touch.
+const resettable: (keyof Settings)[] = [
+  "lightTheme",
+  "locale",
+  "size",
+  "compact",
+  "showTimestamp",
+  "softWrap",
+  "highlightErrors",
+  "dateLocale",
+  "hourStyle",
+  "showAllContainers",
+  "groupContainers",
+  "showAppIcons",
+  "automaticRedirect",
+  "search",
+  "showImageUpdateAlert",
+  "showStd",
+  "smallerScrollbars",
+];
+
+const reset = () => {
+  Object.assign(settings.value, Object.fromEntries(resettable.map((key) => [key, DEFAULT_SETTINGS[key]])));
 };
-
-const fakeMessages = computedWithControl(
-  () => i18n.global.locale.value,
-  () => [
-    new SimpleLogEntry(t("settings.log.preview"), "123", 1, hoursAgo(16), "info", "stdout", ""),
-    new SimpleLogEntry(t("settings.log.warning"), "123", 2, hoursAgo(12), "warn", "stdout", ""),
-    new GroupedLogEntry(
-      [
-        t("settings.log.multi-line-error.start-line"),
-        t("settings.log.multi-line-error.middle-line"),
-        t("settings.log.multi-line-error.end-line"),
-      ],
-      "123",
-      3,
-      hoursAgo(7),
-      "error",
-      "stderr",
-    ),
-    new ComplexLogEntry(
-      {
-        message: t("settings.log.complex"),
-        context: {
-          key: "value",
-          key2: "value2",
-        },
-      },
-      "123",
-      6,
-      new Date(),
-      "info",
-      "stdout",
-      "",
-    ),
-    new SimpleLogEntry(t("settings.log.simple"), "123", 7, new Date(), "debug", "stderr", ""),
-  ],
-);
 </script>
-
-<style scoped>
-@reference "@/main.css";
-
-:deep(.text-base-content\/60 a:not(.btn)),
-:deep(.text-base-content\/70 a:not(.btn)) {
-  @apply text-primary;
-}
-:deep(.text-base-content\/60 a:not(.btn):hover),
-:deep(.text-base-content\/70 a:not(.btn):hover) {
-  text-decoration: underline;
-  text-underline-offset: 4px;
-}
-</style>

@@ -6,6 +6,7 @@ const cues = [
   { icon: "mdi:scale-balance", label: "MIT licensed" },
   { icon: "mdi:package-variant-closed", label: "Single binary, no database" },
   { icon: "mdi:server-security", label: "Self-hosted, your logs stay on your network" },
+  { icon: "mdi:account-key-outline", label: "Sign in with GitHub or OIDC" },
 ];
 
 const released = computed(() => {
@@ -20,8 +21,8 @@ const released = computed(() => {
 </script>
 
 <template>
-  <div class="mt-8 flex flex-col gap-2 text-sm text-(--vp-c-text-2)">
-    <ul class="m-0! flex list-none flex-wrap gap-x-5 gap-y-2 p-0!">
+  <div class="mt-8 flex flex-col items-center gap-2 text-sm text-(--vp-c-text-2) min-[960px]:items-start">
+    <ul class="m-0! flex list-none flex-wrap justify-center gap-x-5 gap-y-2 p-0! min-[960px]:justify-start">
       <li v-for="cue in cues" :key="cue.label" class="flex items-center gap-1.5">
         <Icon :icon="cue.icon" class="size-4 opacity-70" />
         {{ cue.label }}

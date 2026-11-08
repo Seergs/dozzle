@@ -1,5 +1,6 @@
 ---
 title: MCP Integration
+description: Enable Dozzle's MCP server so AI assistants like Claude and Copilot can read Docker container logs and stats, and set up clients and authentication.
 ---
 
 # MCP Integration
@@ -35,13 +36,17 @@ services:
 
 All tools are **read-only** and do not modify containers.
 
-| Tool                   | Description                                                                          |
-| ---------------------- | ------------------------------------------------------------------------------------ |
-| `list_containers`      | List all containers across all hosts. Supports optional `state` filter.              |
-| `get_container_logs`   | Fetch structured logs with detected levels, JSON parsing, and multi-line grouping.   |
-| `search_container_logs`| Search container logs for a keyword or phrase. Returns only matching entries.        |
-| `list_hosts`           | List all connected Docker hosts.                                                     |
-| `get_container_stats`  | Get CPU and memory usage history for a container.                                    |
+| Tool                    | Description                                                                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `list_containers`       | List all containers across all hosts. Supports optional `state` filter. Labels are left out unless `include_labels` is true. |
+| `get_container_logs`    | Fetch structured logs with detected levels, JSON parsing, and multi-line grouping.                                           |
+| `search_container_logs` | Search container logs for a keyword or phrase. Returns only matching entries.                                                |
+| `list_hosts`            | List all connected Docker hosts.                                                                                             |
+| `get_container_stats`   | Get CPU and memory usage history for a container.                                                                            |
+
+The log and stats tools take a container ID, short ID or name in `container_id`, so a name keeps working after a redeploy gives the container a new ID. `host` is optional. Without it the container is looked up across every host. If a name matches several containers, a running one wins, then the most recently active, and the result names the others.
+
+Both log tools read the last 5 minutes by default. `since_minutes` changes that, or pass `start` and `end` (RFC 3339) for a fixed window. `level` keeps entries at or above a level (for example `warn`), and `limit` returns only the newest N entries. Answers are capped at 1 MB. When an answer is cut, the newest entries are kept and a note says how many were left out. ANSI colour codes are stripped from messages.
 
 ## Configuring MCP Clients
 
@@ -82,9 +87,22 @@ Add the following to your Claude Desktop MCP configuration:
 
 The MCP endpoint is part of the authenticated API group. When authentication is enabled, MCP clients must provide valid credentials.
 
-### Simple Auth
+### Simple Auth and OIDC
 
-With `--auth-provider simple`, MCP clients need to include a valid JWT token in the `Authorization` header. To obtain a token:
+With `--auth-provider simple` or `--auth-provider oidc`, Dozzle is an OAuth authorization server for MCP clients. Clients that support MCP authorization (VS Code, Claude Code, Claude Desktop and others) sign in on their own. Add the server with no headers, and the first time the client connects it opens a browser tab:
+
+1. Sign in to Dozzle the way you normally do (password, GitHub or your OIDC provider).
+2. Dozzle shows a consent page with the client's name and the address it will send you back to. Choose **Allow**.
+3. The browser returns to the client, which stores the token and refreshes it on its own.
+
+The token only works on `/api/mcp` and carries the same roles and container filters as your browser session. Access tokens last an hour. Refresh tokens stop working 30 days after you approved the client, and the client then asks you to approve it again. Anything that signs everyone out of Dozzle, such as editing `users.yml` or changing the OIDC issuer, also revokes MCP tokens.
+
+> [!NOTE]
+> Dozzle builds its OAuth URLs from the request, the same way it builds the OIDC callback. Behind a reverse proxy, forward `Host` (or `X-Forwarded-Host`) and `X-Forwarded-Proto`. With a custom base path, some clients look for metadata under `/.well-known/` at the root of the domain, so route `/.well-known/` to Dozzle if you can.
+
+#### Clients without OAuth support
+
+With simple auth, a client that can only send static headers can use a session token instead:
 
 1. Send a `POST` request to `/api/token` with your username and password.
 2. Configure your MCP client to send the token as a Bearer header.
@@ -104,6 +122,36 @@ For example, in VS Code MCP settings:
   }
 }
 ```
+
+This is not available with oidc, because there is no password to exchange for a token.
+
+#### Static token for headless clients
+
+A client that can't open a browser, such as an MCP gateway like LiteLLM, can use a static token instead. Set `--mcp-token` or `DOZZLE_MCP_TOKEN` to a random string of at least 32 characters, for example from `openssl rand -hex 32`. It works with both simple auth and oidc.
+
+```yaml [docker-compose.yml]
+services:
+  dozzle:
+    image: amir20/dozzle:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DOZZLE_ENABLE_MCP: true
+      DOZZLE_MCP_TOKEN: <your-random-token>
+```
+
+The client sends it as `Authorization: Bearer <your-random-token>`. In LiteLLM that is:
+
+```yaml
+mcp_servers:
+  dozzle:
+    url: http://dozzle:8080/api/mcp
+    transport: http
+    auth_type: bearer_token
+    auth_value: os.environ/DOZZLE_MCP_TOKEN
+```
+
+The token only works on `/api/mcp`. It isn't tied to a user, so it sees every container the global `--filter` allows, with no per-user filter on top. It never expires. To revoke it, change or remove the variable and restart Dozzle.
 
 ### Forward Proxy Auth
 

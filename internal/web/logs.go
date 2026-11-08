@@ -1,303 +1,53 @@
 package web
 
 import (
-	"compress/gzip"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"math"
-	"regexp"
-	"sort"
-	"strconv"
-	"strings"
-
 	"io"
 	"net/http"
 	"net/url"
 	"runtime"
-
+	"strings"
 	"time"
 
-	"github.com/amir20/dozzle/internal/auth"
+	"github.com/amir20/dozzle/internal/analytics"
 	"github.com/amir20/dozzle/internal/container"
-	container_support "github.com/amir20/dozzle/internal/support/container"
-	support_web "github.com/amir20/dozzle/internal/support/web"
 	"github.com/amir20/dozzle/internal/utils"
+	"github.com/amir20/dozzle/internal/web/search"
+	"github.com/amir20/dozzle/internal/web/sse"
 	"github.com/dustin/go-humanize"
 	"github.com/go-chi/chi/v5"
-
 	"github.com/rs/zerolog/log"
 )
 
-func parseStdTypes(r *http.Request) container.StdType {
-	var stdTypes container.StdType
-	if r.URL.Query().Has("stdout") {
-		stdTypes |= container.STDOUT
-	}
-	if r.URL.Query().Has("stderr") {
-		stdTypes |= container.STDERR
-	}
-	return stdTypes
-}
-
-func matchesFilter(event *container.LogEvent, regex *regexp.Regexp, levels map[string]struct{}, inverse bool) bool {
-	if regex != nil && inverse == support_web.Search(regex, event) {
-		return false
-	}
-	_, ok := levels[event.Level]
-	return ok
-}
-
-// searchStatus reports progress of the filtered backfill walk to the frontend.
-// scannedTo is the oldest boundary scanned so far; reason is only set when done.
-type searchStatus struct {
-	ScannedTo time.Time `json:"scannedTo"`
-	Matches   int       `json:"matches"`
-	Done      bool      `json:"done"`
-	Reason    string    `json:"reason,omitempty"`
-}
-
-func (h *handler) resolveLabels(r *http.Request) container.ContainerLabels {
-	labels := h.config.Labels
-	if h.config.Authorization.Provider != NONE {
-		user := auth.UserFromContext(r.Context())
-		if user.ContainerLabels.Exists() {
-			labels = user.ContainerLabels
-		}
-	}
-	return labels
-}
-
-// restrictedUser reports whether the caller is confined by a per-user label
-// filter. The global --filter applies to everyone, so it doesn't count.
-func (h *handler) restrictedUser(r *http.Request) bool {
-	if h.config.Authorization.Provider == NONE {
-		return false
-	}
-	user := auth.UserFromContext(r.Context())
-	return user != nil && user.ContainerLabels.Exists()
-}
-
-// visibleContainerIDs returns the set of container ids the caller may see.
-// Used by handlers that receive container ids from the client (or get them
-// back from Cloud) and have no other way to run them through the store's ACL.
-func (h *handler) visibleContainerIDs(r *http.Request) map[string]struct{} {
-	containers, _ := h.hostService.ListAllContainers(h.resolveLabels(r))
-	ids := make(map[string]struct{}, len(containers))
-	for _, c := range containers {
-		ids[c.ID] = struct{}{}
-	}
-	return ids
-}
-
-func (h *handler) fetchLogsBetweenDates(w http.ResponseWriter, r *http.Request) {
-	plainText := strings.Contains(r.Header.Get("Accept"), "text/plain")
-	if plainText {
-		w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
-	} else {
-		w.Header().Set("Content-Type", "application/x-jsonl; charset=UTF-8")
-	}
-
-	from, _ := time.Parse(time.RFC3339Nano, r.URL.Query().Get("from"))
-	to, _ := time.Parse(time.RFC3339Nano, r.URL.Query().Get("to"))
-	id := chi.URLParam(r, "id")
-
-	stdTypes := parseStdTypes(r)
-	if stdTypes == 0 {
-		http.Error(w, "stdout or stderr is required", http.StatusBadRequest)
-		return
-	}
-
-	containerService, err := h.hostService.FindContainer(hostKey(r), id, h.resolveLabels(r))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-
-	delta := max(to.Sub(from), time.Second*3)
-
-	var regex *regexp.Regexp
-	if r.URL.Query().Has("filter") {
-		regex, err = support_web.ParseRegex(r.URL.Query().Get("filter"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-
-	inverse := r.URL.Query().Get("inverse") == "true"
-
-	onlyComplex := r.URL.Query().Has("jsonOnly")
-	everything := r.URL.Query().Has("everything")
-	if everything {
-		from = time.Time{}
-		to = time.Now()
-	}
-
-	minimum := 0
-	buffer := utils.NewRingBuffer[*container.LogEvent](500)
-	if r.URL.Query().Has("min") {
-		minimum, err = strconv.Atoi(r.URL.Query().Get("min"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if minimum < 0 || minimum > buffer.Size {
-			http.Error(w, "minimum must be between 0 and buffer size", http.StatusBadRequest)
-			return
-		}
-		buffer = utils.NewRingBuffer[*container.LogEvent](minimum)
-	}
-
-	maxStart := math.MaxInt
-	if r.URL.Query().Has("maxStart") {
-		maxStart, err = strconv.Atoi(r.URL.Query().Get("maxStart"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if maxStart < 1 || maxStart > buffer.Size {
-			http.Error(w, "invalid maxStart", http.StatusBadRequest)
-			return
-		}
-	}
-
-	levels := make(map[string]struct{})
-	for _, level := range r.URL.Query()["levels"] {
-		levels[level] = struct{}{}
-	}
-
-	lastSeenId := uint32(0)
-	if r.URL.Query().Has("lastSeenId") {
-		to = to.Add(50 * time.Millisecond)
-		num, err := strconv.ParseUint(r.URL.Query().Get("lastSeenId"), 10, 32)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		lastSeenId = uint32(num)
-	}
-
-	startId := uint32(0)
-	if r.URL.Query().Has("startId") {
-		from = from.Add(-50 * time.Millisecond)
-		num, err := strconv.ParseUint(r.URL.Query().Get("startId"), 10, 32)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		startId = uint32(num)
-	}
-
-	var writer io.Writer = w
-	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-		w.Header().Set("Content-Encoding", "gzip")
-		gzWriter := gzip.NewWriter(w)
-		defer gzWriter.Close()
-		writer = gzWriter
-	}
-	encoder := json.NewEncoder(writer)
-
-	startIdFound := startId == 0
-	for {
-		if minimum > 0 && buffer.Len() >= minimum {
-			break
-		}
-
-		buffer.Clear()
-
-		events, err := containerService.LogsBetweenDates(r.Context(), from, to, stdTypes)
-		if err != nil {
-			log.Error().Err(err).Msg("error fetching logs")
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		for event := range events {
-			if everything {
-				if _, ok := event.Message.(string); onlyComplex && ok {
-					continue
-				}
-				if regex != nil && inverse == support_web.Search(regex, event) {
-					continue
-				}
-				if len(levels) > 0 {
-					if _, ok := levels[event.Level]; !ok {
-						continue
-					}
-				}
-				if plainText {
-					// Expand grouped events into their fragment lines; grouped
-					// events store their lines in Message and have an empty
-					// RawMessage, so writing RawMessage alone drops every group.
-					fmt.Fprintf(writer, "%s\n", event.PlainText())
-				} else if err := encoder.Encode(event); err != nil {
-					log.Error().Err(err).Msg("error encoding log event")
-				}
-				continue
-			}
-
-			if !matchesFilter(event, regex, levels, inverse) {
-				continue
-			}
-
-			if !startIdFound {
-				if event.Id == startId {
-					log.Debug().Uint32("startId", startId).Msg("found start id, will include subsequent events")
-					startIdFound = true
-				}
-				continue
-			}
-
-			if lastSeenId != 0 && event.Id == lastSeenId {
-				log.Debug().Uint32("lastSeenId", lastSeenId).Msg("found last seen id")
-				break
-			}
-
-			if buffer.Len() >= maxStart {
-				break
-			}
-
-			support_web.EscapeHTMLValues(event)
-			buffer.Push(event)
-		}
-
-		if everything || from.Before(containerService.Container.Created) || minimum == 0 {
-			break
-		}
-
-		from = from.Add(-delta)
-		delta = delta * 2
-	}
-
-	log.Debug().Int("buffer_size", buffer.Len()).Msg("sending logs to client")
-
-	for _, event := range buffer.Data() {
-		if err := encoder.Encode(event); err != nil {
-			log.Error().Err(err).Msg("error encoding log event")
-			return
-		}
-	}
-}
-
+// streamContainerLogs streams any set of containers, on any hosts, each named as
+// `container=<host>/<id>` the way /api/containers/logs names them. One container
+// is the container page, several are a merged view.
 func (h *handler) streamContainerLogs(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-
-	h.streamLogsForContainers(w, r, func(container *container.Container) bool {
-		return container.ID == id && container.Host == hostKey(r)
-	})
-}
-
-func (h *handler) streamLogsMerged(w http.ResponseWriter, r *http.Request) {
-	ids := make(map[string]bool)
-	for id := range strings.SplitSeq(chi.URLParam(r, "ids"), ",") {
-		ids[id] = true
+	refs, err := parseContainerRefs(r.URL.Query()["container"])
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(refs) == 1 {
+		analytics.Count("view.container")
+	} else {
+		analytics.Count("view.merged")
 	}
 
-	h.streamLogsForContainers(w, r, func(container *container.Container) bool {
-		return ids[container.ID] && container.Host == hostKey(r)
-	})
+	wanted := make(map[containerRef]struct{}, len(refs))
+	unique := make([]containerRef, 0, len(refs))
+	for _, ref := range refs {
+		if _, seen := wanted[ref]; !seen {
+			wanted[ref] = struct{}{}
+			unique = append(unique, ref)
+		}
+	}
+
+	h.streamLogsForContainers(w, r, func(c *container.Container) bool {
+		_, ok := wanted[containerRef{c.Host, c.ID}]
+		return ok
+	}, streamScope{containers: unique})
 }
 
 func (h *handler) streamLogsWithLabels(w http.ResponseWriter, r *http.Request) {
@@ -315,8 +65,15 @@ func (h *handler) streamLogsWithLabels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	analytics.Count(labelView(labelFilters))
+
+	// all=1 comes from the Kubernetes tab with "Show all containers" on, where a
+	// finished Job pod is still listed and should open to its logs. A created
+	// container has none to read yet.
+	all := r.URL.Query().Get("all") == "1"
+
 	h.streamLogsForContainers(w, r, func(container *container.Container) bool {
-		if container.State != "running" {
+		if container.State != "running" && (!all || container.State == "created") {
 			return false
 		}
 
@@ -328,19 +85,49 @@ func (h *handler) streamLogsWithLabels(w http.ResponseWriter, r *http.Request) {
 		}
 
 		return len(labelFilters) > 0
-	})
+	}, streamScope{})
+}
+
+// labelView names the view a label stream serves, by the label the page filters
+// on: a swarm stack, a swarm service, or a Kubernetes namespace or workload.
+func labelView(filters map[string]string) string {
+	switch {
+	case filters["com.docker.stack.namespace"] != "":
+		return "view.stack"
+	case filters["com.docker.swarm.service.name"] != "":
+		return "view.service"
+	default:
+		return "view.namespace"
+	}
+}
+
+// pathParam reads a URL param that may hold a "/". chi routes on RawPath, and so
+// returns the param still escaped, only when Go set RawPath (in practice for %2F);
+// otherwise the param is already decoded and unescaping again would mangle a "%".
+func pathParam(r *http.Request, key string) (string, error) {
+	value := chi.URLParam(r, key)
+	if r.URL.RawPath == "" {
+		return value, nil
+	}
+	return url.PathUnescape(value)
 }
 
 func (h *handler) streamGroupedLogs(w http.ResponseWriter, r *http.Request) {
-	group := chi.URLParam(r, "group")
+	analytics.Count("view.group")
+	group, err := pathParam(r, "group")
+	if err != nil || group == "" {
+		http.Error(w, "invalid group", http.StatusBadRequest)
+		return
+	}
 
 	h.streamLogsForContainers(w, r, func(container *container.Container) bool {
 		return container.State == "running" && container.Group == group
-	})
+	}, streamScope{})
 }
 
 func (h *handler) streamHostGroupLogs(w http.ResponseWriter, r *http.Request) {
-	group, err := url.PathUnescape(chi.URLParam(r, "group"))
+	analytics.Count("view.host")
+	group, err := pathParam(r, "group")
 	if err != nil || group == "" {
 		http.Error(w, "invalid group", http.StatusBadRequest)
 		return
@@ -356,24 +143,92 @@ func (h *handler) streamHostGroupLogs(w http.ResponseWriter, r *http.Request) {
 	h.streamLogsForContainers(w, r, func(c *container.Container) bool {
 		_, ok := hostIDs[c.Host]
 		return c.State == "running" && ok
-	})
+	}, streamScope{})
 }
 
 func (h *handler) streamHostLogs(w http.ResponseWriter, r *http.Request) {
+	analytics.Count("view.host")
 	host := hostKey(r)
+	// An empty host is the zero streamScope, which lists every host.
+	if host == "" {
+		http.Error(w, "host not found", http.StatusNotFound)
+		return
+	}
 	h.streamLogsForContainers(w, r, func(container *container.Container) bool {
 		return container.State == "running" && container.Host == host
-	})
+	}, streamScope{host: host})
 }
 
-func (h *handler) streamLogsForContainers(w http.ResponseWriter, r *http.Request, containerFilter container_support.ContainerFilter) {
-	stdTypes := parseStdTypes(r)
+// streamScope says where a stream looks for the containers it starts with. The
+// zero value lists every host, for streams that legitimately span hosts.
+type streamScope struct {
+	// host names the single host every container the stream can match lives on.
+	// Listing just that host skips the fleet-wide fan-out, which re-dials every
+	// unreachable agent at up to --timeout each before the first log line is read.
+	host string
+	// containers names exactly the containers the stream shows, so nothing is
+	// listed at all: each is found in its own host's store when its tail starts.
+	containers []containerRef
+}
+
+// listStreamContainers returns the containers a new stream starts with. Each is
+// still resolved, and ACL checked, before anything about it is sent.
+func (h *handler) listStreamContainers(scope streamScope, labels container.ContainerLabels, containerFilter container.ContainerFilter) []containerRef {
+	if scope.containers != nil {
+		return scope.containers
+	}
+
+	if scope.host == "" {
+		containers, errs := h.hostService.ListAllContainersFiltered(labels, containerFilter)
+		if len(errs) > 0 {
+			log.Warn().Err(errs[0]).Msg("error while listing containers")
+		}
+		refs := make([]containerRef, len(containers))
+		for i, c := range containers {
+			refs[i] = containerRef{c.Host, c.ID}
+		}
+		return refs
+	}
+
+	hostContainers, err := h.hostService.ListContainersForHost(scope.host, labels)
+	if err != nil {
+		log.Warn().Err(err).Str("host", scope.host).Msg("error while listing containers")
+	}
+	var refs []containerRef
+	for _, c := range hostContainers {
+		if containerFilter(&c) {
+			refs = append(refs, containerRef{c.Host, c.ID})
+		}
+	}
+	return refs
+}
+
+func (h *handler) streamLogsForContainers(w http.ResponseWriter, r *http.Request, containerFilter container.ContainerFilter, scope streamScope) {
+	q := r.URL.Query()
+	stdTypes := parseStdTypes(q)
 	if stdTypes == 0 {
 		http.Error(w, "stdout or stderr is required", http.StatusBadRequest)
 		return
 	}
 
-	sseWriter, err := support_web.NewSSEWriter(r.Context(), w, r)
+	filter, err := parseLogFilter(q)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// `since` is the start the person picked ("live, from 15 minutes ago"). The
+	// tail never replays older lines, and a search's backfill stops there too.
+	var floor time.Time
+	if q.Has("since") {
+		floor, err = time.Parse(time.RFC3339Nano, q.Get("since"))
+		if err != nil {
+			http.Error(w, "since must be an RFC 3339 time", http.StatusBadRequest)
+			return
+		}
+	}
+
+	sseWriter, err := sse.NewWriter(r.Context(), w, r)
 	if err != nil {
 		log.Error().Err(err).Msg("error creating sse writer")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -381,179 +236,97 @@ func (h *handler) streamLogsForContainers(w http.ResponseWriter, r *http.Request
 	}
 	defer sseWriter.Close()
 
+	ctx := r.Context()
 	userLabels := h.resolveLabels(r)
+	refs := h.listStreamContainers(scope, userLabels, containerFilter)
 
-	existingContainers, errs := h.hostService.ListAllContainersFiltered(userLabels, containerFilter)
-	if len(errs) > 0 {
-		log.Warn().Err(errs[0]).Msg("error while listing containers")
-	}
-
-	absoluteTime := time.Time{}
 	liveLogs := make(chan *container.LogEvent)
 	events := make(chan *container.ContainerEvent, 1)
 	backfill := make(chan []*container.LogEvent)
 	searchStatusCh := make(chan searchStatus)
 
-	levels := make(map[string]struct{})
-	for _, level := range r.URL.Query()["levels"] {
-		levels[level] = struct{}{}
+	// With a narrowing filter the live tail starts now, and everything older
+	// arrives through the backfill walk instead of the tail's own history.
+	since := floor
+	if filter.narrowing() {
+		since = time.Now()
 	}
 
-	allLogs := true
-	for level := range container.SupportedLogLevels {
-		if _, ok := levels[level]; !ok {
-			allLogs = false
+	// Each container is resolved once and shared by its tail and the backfill
+	// walk: for an agent host FindContainer is a gRPC round-trip. A tail starts as
+	// soon as its own container resolves, so one slow host doesn't hold up the rest.
+	opened := make(chan []*container.ContainerService, 1)
+	go func() {
+		services, _ := h.resolveContainers(refs, userLabels, func(s *container.ContainerService) {
+			go tailContainerLogs(ctx, s, since, stdTypes, liveLogs, events)
+		})
+		opened <- services
+		if filter.narrowing() {
+			searchBackfill(ctx, services, since, floor, stdTypes, filter, backfill, searchStatusCh)
 		}
-	}
-
-	var regex *regexp.Regexp
-	if r.URL.Query().Has("filter") {
-		var err error
-		regex, err = support_web.ParseRegex(r.URL.Query().Get("filter"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-
-	inverse := r.URL.Query().Get("inverse") == "true"
-
-	if !allLogs || regex != nil || inverse {
-		absoluteTime = time.Now()
-
-		go func() {
-			minimum := 50
-			found := 0
-			delta := -10 * time.Second
-			to := absoluteTime
-			// ctx-guarded send so the goroutine never blocks after the client disconnects
-			send := func(s searchStatus) {
-				select {
-				case searchStatusCh <- s:
-				case <-r.Context().Done():
-				}
-			}
-			// Always emit exactly one terminal status, whatever exit fires (ran out
-			// of logs, hit the cap, or errored). Without this the frontend would keep
-			// suppressing the empty state and spin forever. "exhausted" is the default
-			// for running out of logs and for error/early returns; "capped" is set only
-			// when the loop completes by reaching the match cap.
-			reason := "exhausted"
-			defer func() {
-				send(searchStatus{ScannedTo: to, Matches: found, Done: true, Reason: reason})
-			}()
-			for minimum > 0 {
-				events := make([]*container.LogEvent, 0)
-				stillRunning := false
-				for _, container := range existingContainers {
-					containerService, err := h.hostService.FindContainer(container.Host, container.ID, userLabels)
-
-					if err != nil {
-						log.Error().Err(err).Msg("error while finding container")
-						return
-					}
-
-					if to.Before(containerService.Container.Created) {
-						continue
-					}
-
-					logs, err := containerService.LogsBetweenDates(r.Context(), to.Add(delta), to, stdTypes)
-					if err != nil {
-						log.Error().Err(err).Msg("error while fetching logs")
-						return
-					}
-
-					for log := range logs {
-						if !matchesFilter(log, regex, levels, inverse) {
-							continue
-						}
-						events = append(events, log)
-					}
-
-					stillRunning = true
-				}
-
-				if !stillRunning {
-					// scanned past the oldest container's birth: nothing older exists
-					return
-				}
-
-				to = to.Add(delta)
-				delta *= 2
-				minimum -= len(events)
-				found += len(events)
-				sort.Slice(events, func(i, j int) bool {
-					return events[i].Timestamp < events[j].Timestamp
-				})
-				if len(events) > 0 {
-					select {
-					case backfill <- events:
-					case <-r.Context().Done():
-						return
-					}
-				}
-				send(searchStatus{ScannedTo: to, Matches: found, Done: false})
-			}
-			// accumulated enough matches; more may exist further back
-			reason = "capped"
-		}()
-	}
-
-	streamLogs := func(c container.Container) {
-		containerService, err := h.hostService.FindContainer(c.Host, c.ID, userLabels)
-		if err != nil {
-			log.Error().Err(err).Msg("error while finding container")
-			return
-		}
-		c = containerService.Container
-		start := utils.Max(absoluteTime, c.StartedAt)
-		err = containerService.StreamLogs(r.Context(), start, stdTypes, liveLogs)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				log.Debug().Str("container", c.ID).Msg("streaming ended")
-				finishedAt := c.FinishedAt
-				if c.FinishedAt.IsZero() {
-					finishedAt = time.Now()
-				}
-				events <- &container.ContainerEvent{
-					ActorID: c.ID,
-					Name:    "container-stopped",
-					Host:    c.Host,
-					Time:    finishedAt,
-				}
-			} else if errors.Is(err, context.Canceled) || r.Context().Err() != nil {
-				// the client went away; a read already in flight comes back as
-				// "use of closed network connection" instead of a cancellation
-				log.Debug().Err(err).Str("container", c.ID).Msg("streaming stopped after client disconnected")
-			} else {
-				log.Error().Err(err).Str("container", c.ID).Msg("unknown error while streaming logs")
-			}
-		}
-	}
-
-	for _, container := range existingContainers {
-		go streamLogs(container)
-	}
+	}()
 
 	newContainers := make(chan container.Container)
-	h.hostService.SubscribeContainersStarted(r.Context(), newContainers, containerFilter)
+	h.hostService.SubscribeContainersStarted(ctx, newContainers, containerFilter)
+
+	// Update markers: the update that created a container this stream shows,
+	// so the viewer can put "1.4.1 → 1.4.2" above its first lines. An update
+	// is recorded once its swap is done, after the new container started, so
+	// one that finishes while the stream is open arrives on updates. Only a
+	// container that resolved is marked, since the lookup is the ACL check.
+	markers := newUpdateMarkers(container.Updates)
+	updates := make(chan container.UpdateRecord, 16)
+	markers.records.Subscribe(ctx, updates)
 
 	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	sseWriter.Retry(reconnectDelay)
 	sseWriter.Ping()
 loop:
 	for {
 		select {
+		case services := <-opened:
+			for _, u := range markers.opened(services) {
+				if err := sseWriter.Event("container-update", u); err != nil {
+					log.Error().Err(err).Msg("error encoding container update")
+				}
+			}
+
 		case logEvent := <-liveLogs:
-			if !matchesFilter(logEvent, regex, levels, inverse) {
+			if !filter.matches(logEvent) {
 				continue
 			}
 
-			support_web.EscapeHTMLValues(logEvent)
+			search.EscapeHTMLValues(logEvent)
 			sseWriter.Message(logEvent)
 		case c := <-newContainers:
-			if _, err := h.hostService.FindContainer(c.Host, c.ID, userLabels); err == nil {
-				events <- &container.ContainerEvent{ActorID: c.ID, Name: "container-started", Host: c.Host, Time: time.Now()}
-				go streamLogs(c)
+			// The lookup doubles as the ACL check, so hand the resolved service
+			// straight to the streamer instead of resolving the same container twice.
+			if containerService, err := h.hostService.FindContainer(c.Host, c.ID, userLabels); err == nil {
+				// Written straight to the client instead of pushed through `events`.
+				// This case runs on the same goroutine that drains `events`, so a send
+				// here waits on a reader that is this very statement: with the buffer
+				// already holding a container-stopped from a tail — which is what a
+				// redeploy produces — the handler deadlocks for good. It then stops
+				// draining newContainers, which backs up into the shared container store
+				// and freezes it for every client on that host.
+				event := &container.ContainerEvent{ActorID: c.ID, Name: "container-started", Host: c.Host, Time: time.Now()}
+				if err := sseWriter.Event("container-event", event); err != nil {
+					log.Error().Err(err).Msg("error encoding container event")
+				}
+				if u, ok := markers.started(c); ok {
+					if err := sseWriter.Event("container-update", u); err != nil {
+						log.Error().Err(err).Msg("error encoding container update")
+					}
+				}
+				go tailContainerLogs(ctx, containerService, since, stdTypes, liveLogs, events)
+			}
+
+		case u := <-updates:
+			if markers.shows(u) {
+				if err := sseWriter.Event("container-update", u); err != nil {
+					log.Error().Err(err).Msg("error encoding container update")
+				}
 			}
 
 		case event := <-events:
@@ -564,7 +337,7 @@ loop:
 
 		case backfillEvents := <-backfill:
 			for _, event := range backfillEvents {
-				support_web.EscapeHTMLValues(event)
+				search.EscapeHTMLValues(event)
 			}
 			if err := sseWriter.Event("logs-backfill", backfillEvents); err != nil {
 				log.Error().Err(err).Msg("error encoding container event")
@@ -578,11 +351,52 @@ loop:
 		case <-ticker.C:
 			sseWriter.Ping()
 
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			break loop
 		}
 	}
 
+	logMemStats()
+}
+
+// tailContainerLogs streams one container's logs from `since` (or its start, if
+// later) into logs, and reports a container-stopped on events when it ends.
+func tailContainerLogs(ctx context.Context, containerService *container.ContainerService, since time.Time, stdTypes container.StdType, logs chan<- *container.LogEvent, events chan<- *container.ContainerEvent) {
+	c := containerService.Container
+	start := utils.Max(since, c.StartedAt)
+	err := containerService.StreamLogs(ctx, start, stdTypes, logs)
+	if err == nil {
+		return
+	}
+
+	if errors.Is(err, io.EOF) {
+		log.Debug().Str("container", c.ID).Msg("streaming ended")
+		// c is the container as it was when the tail began, so a container that
+		// restarts still carries its previous run's FinishedAt. Only trust it when
+		// it belongs to this run.
+		finishedAt := c.FinishedAt
+		if !finishedAt.After(c.StartedAt) {
+			finishedAt = time.Now()
+		}
+		select {
+		case events <- &container.ContainerEvent{
+			ActorID: c.ID,
+			Name:    "container-stopped",
+			Host:    c.Host,
+			Time:    finishedAt,
+		}:
+		case <-ctx.Done():
+		}
+	} else if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		// the client went away; a read already in flight comes back as
+		// "use of closed network connection" instead of a cancellation
+		log.Debug().Err(err).Str("container", c.ID).Msg("streaming stopped after client disconnected")
+	} else {
+		log.Error().Err(err).Str("container", c.ID).Msg("unknown error while streaming logs")
+	}
+}
+
+func logMemStats() {
 	if e := log.Debug(); e.Enabled() {
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)

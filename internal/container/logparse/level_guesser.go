@@ -1,0 +1,387 @@
+package logparse
+
+import (
+	"maps"
+	"math"
+	"regexp"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/amir20/dozzle/internal/container"
+
+	"github.com/rs/zerolog/log"
+)
+
+var SupportedLogLevels map[string]struct{}
+
+// Canonical names (the first of each group) must match Level in assets/models/LogEntry.ts
+var logLevels = [][]string{
+	{"error", "err", "fail"},
+	{"warn", "warning", "wrn"},
+	{"info", "inf", "information", "notice", "note"},
+	{"debug", "dbg", "dbug"},
+	{"trace", "trce", "verbose", "ver", "vbs", "tracedebug", "heavydebug"},
+	{"fatal", "sev", "severe", "crit", "critical"},
+}
+
+// aliasToCanonical maps every alias to its canonical level name.
+var aliasToCanonical = map[string]string{}
+
+// upperOnlyLevels are level words that only mean a level in upper case. "LOG"
+// is the info level of Postgres and NestJS, but "log" in prose is just a word.
+// "PANIC" is Postgres's worst level, but a Go "recovered from panic: ... error:"
+// is an error, not two levels.
+var upperOnlyLevels = map[string]string{"LOG": "info", "PANIC": "fatal"}
+
+// levelMatcher extracts a canonical log level from a line. re must expose a
+// single capture group holding the level alias, or a single-letter code when
+// single is true (mapped via singleLetterToLevel).
+type levelMatcher struct {
+	re     *regexp.Regexp
+	single bool
+}
+
+// levelTiers groups matchers by how confidently their shape identifies the log
+// level, highest confidence first:
+//
+//  1. ^<level>     start-of-line prefix: "ERROR: ...", "INF ...", "E0806 14:55:55.980915 ...",
+//     "[09:58:00 ERR] ...", "[2026-10-25 06:44:27] WARNING[1]: ..."
+//  2. [<level>]    bracketed tag / single-letter: "[ERROR]", "[E]"
+//  3. > <level>    signale/consola marker: "› ℹ  info      started"
+//  4. <tag>:<level> structured prefix: "Zigbee2MQTT:info ", "::INFO::", "[1]: INFO " (a gap only before upper-case)
+//  5. "<LEVEL>"    quoted upper-case value: LL="ERROR"
+//
+// guessFromString walks the tiers in order and stops at the first that matches,
+// so a real level prefix at the front of the line always beats a level word
+// buried in the message body. Within a tier, two different levels mean the line
+// is ambiguous and we return "unknown" rather than guess. Level severity is
+// deliberately never a tie-breaker. If no tier matches, midLineMatchers get the
+// last word.
+var levelTiers [][]levelMatcher
+
+// midLineMatchers find a level word somewhere inside the line:
+//
+//   - <sp><LEVEL>[:<sp>] bare upper-case token: "123 ERROR foo", "UTC [61] LOG:  ..."
+//   - <sp><level>[/|:-] separator in any case: " error:", " info|"
+//
+// Each is read on its own, and two different levels from one of them are
+// still ambiguous. Between them, the one that comes first in the line wins: a
+// logger writes its level before its message. So "... WARN [StorageService]
+// Error: EROFS" is a warning and "[api] info: upstream returned ERROR 502" is
+// info.
+var midLineMatchers []levelMatcher
+
+// singleLetterBracket matches single-letter levels in brackets, e.g. [I], [E], [W].
+// A bracket glued to an identifier is a generic or an index, not a tag: the C#
+// stack frame "at HttpClient.GetAsync[T](HttpRequest request)" is not trace.
+var singleLetterBracket = regexp.MustCompile(`(?:^|[^\w])\[([EWIDFTV])\]`)
+
+// klogPrefix matches the Kubernetes klog/glog header, where the single-letter
+// level is glued straight onto the timestamp with no separator, e.g.
+//
+//	E0806 14:55:55.980915       1 fsHandler.go:121] failed to collect ...
+//
+// Used by the whole Kubernetes toolchain (kubelet, kube-*, cAdvisor, etcd
+// tooling). The full "Lmmdd hh:mm:ss.uuuuuu" shape is required so ordinary
+// prose starting with a capital letter cannot match.
+var klogPrefix = regexp.MustCompile(`^([EWIDFTV])\d{4} \d{2}:\d{2}:\d{2}\.\d{6}`)
+
+// bracketedHeader matches a line that opens with a bracket holding a timestamp
+// followed by the level, the Serilog default output template
+// "[{Timestamp} {Level:u3}]" used by most .NET apps (Cleanuparr, the *arr
+// stack):
+//
+//	[2026-09-28 09:58:00.046 ERR] [MalwareBlocker] Error creating ...
+//	[09:58:00 INF] Starting up
+//
+// The timestamp is inside the bracket, so timestampRegex cannot strip it and
+// the [<level>] tier never sees a bare tag. Requiring a digit right before the
+// level keeps prose like "[Connection error]" from matching.
+func bracketedHeader(joined string) *regexp.Regexp {
+	return regexp.MustCompile(`(?i)^\[[^\]]*\d\s+(` + joined + `)\s*\]`)
+}
+
+// asteriskHeader matches the Asterisk PBX log line, where a bracketed timestamp
+// is followed by the level glued to the thread id, and to the call id when the
+// message belongs to a call:
+//
+//	[2026-10-25 06:44:27] WARNING[1]: res_odbc.c:577 load_odbc_config: ...
+//	[2026-10-25 07:12:03] WARNING[2271][C-0000000a]: chan_pjsip.c:2567 request: ...
+//
+// The timestamp is bracketed, so timestampRegex cannot strip it, and the "[1]"
+// after the level hides it from every separator the other matchers look for.
+func asteriskHeader(joined string) *regexp.Regexp {
+	return regexp.MustCompile(`(?i)^\[[^\]]*\d\]\s+(` + joined + `)\[\d+\](?:\[[^\]]+\])?:`)
+}
+
+var timestampRegex = regexp.MustCompile(`^(?:\d{4}[-/]\d{2}[-/]\d{2}(?:[T ](?:\d{2}:\d{2}:\d{2}(?:[.,]\d+)?Z?|\d{2}:\d{2}(?:AM|PM)))?\s+)`)
+
+// JSON keys to check for log level (in priority order).
+// severityText/severityNumber are the OpenTelemetry Log Data Model fields.
+var levelKeys = []string{"@l", "level", "log.level", "severity", "severityText", "severityNumber"}
+
+// Pino's default numeric levels. JSON numbers decode to float64.
+var pinoLevels = map[float64]string{
+	10: "trace",
+	20: "debug",
+	30: "info",
+	40: "warn",
+	50: "error",
+	60: "fatal",
+}
+
+// otelSeverityLevel maps an OpenTelemetry severityNumber to a canonical level.
+// Ranges per https://opentelemetry.io/docs/specs/otel/logs/data-model/#field-severitynumber
+func otelSeverityLevel(n float64) string {
+	if n != math.Trunc(n) {
+		return ""
+	}
+	switch {
+	case n >= 1 && n <= 4:
+		return "trace"
+	case n >= 5 && n <= 8:
+		return "debug"
+	case n >= 9 && n <= 12:
+		return "info"
+	case n >= 13 && n <= 16:
+		return "warn"
+	case n >= 17 && n <= 20:
+		return "error"
+	case n >= 21 && n <= 24:
+		return "fatal"
+	}
+	return ""
+}
+
+// otelSeverityNumber reads an OTel severityNumber, which arrives as a JSON
+// number from JSON logs and as a string from logfmt-style maps (some JSON
+// emitters quote it too). Returns "" when it is not a usable severity.
+func otelSeverityNumber(v any) string {
+	switch n := v.(type) {
+	case float64:
+		return otelSeverityLevel(n)
+	case string:
+		if i, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
+			return otelSeverityLevel(float64(i))
+		}
+	}
+	return ""
+}
+
+// otelSeverityText normalizes an OTel severityText. On top of the usual aliases
+// it understands the spec's own short names for sub-levels, which append 1-4 to
+// the base name: TRACE2, INFO3, WARN4. Returns "unknown" for anything else so
+// the caller can fall back to severityNumber.
+func otelSeverityText(s string) string {
+	if level := normalizeLogLevel(s); level != "unknown" {
+		return level
+	}
+	s = container.StripANSI(s)
+	if n := len(s); n > 1 && s[n-1] >= '1' && s[n-1] <= '4' {
+		return normalizeLogLevel(s[:n-1])
+	}
+	return "unknown"
+}
+
+func init() {
+	SupportedLogLevels = make(map[string]struct{}, len(logLevels)+1)
+	var aliases []string
+	for _, group := range logLevels {
+		canonical := group[0]
+		SupportedLogLevels[canonical] = struct{}{}
+		for _, alias := range group {
+			aliasToCanonical[alias] = canonical
+			aliases = append(aliases, alias)
+		}
+	}
+	SupportedLogLevels["unknown"] = struct{}{}
+
+	// Longest aliases first so e.g. "warning" is preferred over "warn".
+	sort.SliceStable(aliases, func(i, j int) bool { return len(aliases[i]) > len(aliases[j]) })
+	joined := strings.Join(aliases, "|")
+	upperOnly := strings.Join(slices.Sorted(maps.Keys(upperOnlyLevels)), "|")
+	upper := strings.ToUpper(joined) + "|" + upperOnly
+
+	levelTiers = [][]levelMatcher{
+		{
+			{re: regexp.MustCompile(`(?i)^(` + joined + `)(?:[^a-z0-9]|\d+\s|$)`)},
+			{re: regexp.MustCompile(`^(` + upperOnly + `)(?::?\s|$)`)},
+			{re: klogPrefix, single: true},
+			{re: bracketedHeader(joined)},
+			{re: asteriskHeader(joined)},
+		},
+		{
+			{re: regexp.MustCompile(`(?i)\[ ?(` + joined + `) ?\]`)},
+			{re: singleLetterBracket, single: true},
+		},
+		// Signale/consola: the level is the first word after the "›" marker. [^a-z]
+		// cannot cross a letter, so only that first word is considered.
+		{{re: regexp.MustCompile(`(?i)\x{203a}[^a-z]*(` + joined + `)(?:[^a-z0-9]|$)`)}},
+		// A gap after the colon is only allowed for an upper-case level, so
+		// "[1]: INFO" matches but prose like "msg: error handling" does not.
+		{
+			{re: regexp.MustCompile(`(?i):(` + joined + `)(?:[^a-z0-9]|$)`)},
+			{re: regexp.MustCompile(`:\s+(` + upper + `)(?:\s|$)`)},
+		},
+		{{re: regexp.MustCompile(`"(` + upper + `)"`)}},
+	}
+	midLineMatchers = []levelMatcher{
+		{re: regexp.MustCompile(`\s(` + upper + `)(?::?\s)`)},
+		{re: regexp.MustCompile(`(?i) (` + joined + `)[/|:-]`)},
+	}
+}
+
+func guessLogLevel(logEvent *container.LogEvent) string {
+	switch value := logEvent.Message.(type) {
+	case string:
+		return guessFromString(value)
+
+	case container.Fields[any]:
+		if value == nil {
+			return "unknown"
+		}
+		for _, key := range levelKeys {
+			v, ok := value.Get(key)
+			if !ok {
+				continue
+			}
+			switch key {
+			case "severityText":
+				// severityText is free-form, so a value we cannot map falls
+				// through to severityNumber instead of ending the search.
+				if s, ok := v.(string); ok {
+					if level := otelSeverityText(s); level != "unknown" {
+						return level
+					}
+				}
+			case "severityNumber":
+				if level := otelSeverityNumber(v); level != "" {
+					return level
+				}
+			default:
+				if s, ok := v.(string); ok {
+					return normalizeLogLevel(s)
+				}
+				if n, ok := v.(float64); ok && key == "level" {
+					if level, ok := pinoLevels[n]; ok {
+						return level
+					}
+				}
+			}
+		}
+
+	case container.Fields[string]:
+		if value == nil {
+			return "unknown"
+		}
+		for _, key := range levelKeys {
+			v, ok := value.Get(key)
+			if !ok {
+				continue
+			}
+			switch key {
+			case "severityText":
+				if level := otelSeverityText(v); level != "unknown" {
+					return level
+				}
+			case "severityNumber":
+				if level := otelSeverityNumber(v); level != "" {
+					return level
+				}
+			default:
+				return normalizeLogLevel(v)
+			}
+		}
+
+	default:
+		log.Debug().Type("type", value).Msg("unknown logEvent type")
+	}
+
+	return "unknown"
+}
+
+var singleLetterToLevel = map[byte]string{
+	'E': "error",
+	'W': "warn",
+	'I': "info",
+	'D': "debug",
+	'T': "trace",
+	'F': "fatal",
+	'V': "trace",
+}
+
+func guessFromString(value string) string {
+	value = container.StripANSI(value)
+	value = timestampRegex.ReplaceAllString(value, "")
+	for _, tier := range levelTiers {
+		level := ""
+		for _, m := range tier {
+			for _, match := range m.re.FindAllStringSubmatch(value, -1) {
+				canonical := m.canonical(match[1])
+				if canonical == "" {
+					continue
+				}
+				if level == "" {
+					level = canonical
+				} else if level != canonical {
+					// Two different levels at the same confidence: ambiguous.
+					return "unknown"
+				}
+			}
+		}
+		if level != "" {
+			return level
+		}
+	}
+
+	level, first := "unknown", -1
+	for _, m := range midLineMatchers {
+		found, at := "", -1
+		for _, match := range m.re.FindAllStringSubmatchIndex(value, -1) {
+			canonical := m.canonical(value[match[2]:match[3]])
+			if canonical == "" {
+				continue
+			}
+			if found == "" {
+				found, at = canonical, match[2]
+			} else if found != canonical {
+				found = "unknown"
+			}
+		}
+		if at >= 0 && (first < 0 || at < first) {
+			level, first = found, at
+		}
+	}
+	return level
+}
+
+// canonical maps a captured level word to its canonical level, or "" when the
+// word is not a level.
+func (m levelMatcher) canonical(word string) string {
+	if m.single {
+		return singleLetterToLevel[word[0]]
+	}
+	if level, ok := upperOnlyLevels[word]; ok {
+		return level
+	}
+	return aliasToCanonical[strings.ToLower(word)]
+}
+
+func normalizeLogLevel(level string) string {
+	level = container.StripANSI(level)
+	level = strings.ToLower(level)
+	if canonical, ok := aliasToCanonical[level]; ok {
+		return canonical
+	}
+	// A level field cannot be prose, so the upper-case-only words count in any
+	// case here: zerolog and logrus both have a "panic" level.
+	if canonical, ok := upperOnlyLevels[strings.ToUpper(level)]; ok {
+		return canonical
+	}
+	if _, ok := SupportedLogLevels[level]; ok {
+		return level
+	}
+	return "unknown"
+}

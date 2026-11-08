@@ -1,5 +1,6 @@
 import { type Settings } from "@/stores/settings";
 import { Host } from "@/stores/hosts";
+import type { CloudConfig } from "@/types/notifications";
 
 const text = document.querySelector("script#config__json")?.textContent || "{}";
 
@@ -10,14 +11,30 @@ export interface Config {
   hostname: string;
   mode: "server" | "swarm" | "k8s";
   hosts: Host[];
-  authProvider: "simple" | "none" | "forward-proxy";
+  authProvider: "simple" | "none" | "forward-proxy" | "oidc";
+  oauthProviders?: { name: string; loginUrl: string; icon: string }[];
+  passwordLogin?: boolean;
   logoutUrl?: string;
   enableActions: boolean;
+  enableUpdates: boolean;
   enableShell: boolean;
   enableDownload: boolean;
   enableNotifications: boolean;
   enableCloud: boolean;
+  canLinkCloud: boolean;
+  dataPersisted?: boolean;
+  // Whether this user may add agents from the UI. Absent outside server mode.
+  canAddHosts?: boolean;
+  // --no-analytics: the page must not report usage.
+  noAnalytics?: boolean;
+  // Full id of the container this Dozzle runs in, absent when it cannot tell.
+  selfContainerId?: string;
+  cloudUrl: string;
+  // Null when this instance is not linked. Inlined so the page does not spend a
+  // round trip asking, since everything else cloud-shaped waits on `linked`.
+  cloudConfig?: CloudConfig | null;
   disableAvatars: boolean;
+  disableSetupWizard: boolean;
   releaseCheckMode: "automatic" | "manual";
   imageCheckMode: "automatic" | "manual" | "off";
   user?: {
@@ -37,6 +54,9 @@ export interface Profile {
   collapsedHostGroups?: Set<string>;
   cloudWelcomeShown?: boolean;
   dismissedImageUpdates?: Set<string>;
+  dismissedLinkHint?: boolean;
+  lastSeenAlertTs?: number;
+  setupSeen?: boolean;
 }
 
 const pageConfig = JSON.parse(text);
@@ -45,6 +65,9 @@ const config: Config = {
   maxLogs: 400,
   version: "v0.0.0",
   hosts: [],
+  // The login page ships a config without the authorized keys, and unit tests
+  // render components with no injected config at all.
+  cloudUrl: "https://cloud.dozzle.dev",
   ...pageConfig,
 };
 

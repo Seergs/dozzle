@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"regexp"
+	"sync/atomic"
 	"time"
 
 	"net/http"
@@ -16,8 +18,9 @@ import (
 	"testing"
 
 	"github.com/amir20/dozzle/internal/container"
-	support_web "github.com/amir20/dozzle/internal/support/web"
-	"github.com/beme/abide"
+	"github.com/amir20/dozzle/internal/container/docker"
+	"github.com/amir20/dozzle/internal/web/search"
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -37,7 +40,7 @@ func Test_handler_streamLogs_happy(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 
 	id := "123456"
-	req, err := http.NewRequestWithContext(ctx, "GET", "/api/hosts/localhost/containers/"+id+"/logs/stream", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "/api/containers/logs/stream?container=localhost/"+id, nil)
 
 	q := req.URL.Query()
 	q.Add("stdout", "true")
@@ -75,14 +78,14 @@ func Test_handler_streamLogs_happy(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	reader := strings.NewReader(regexp.MustCompile(`"time":"[^"]*"`).ReplaceAllString(rr.Body.String(), `"time":"<removed>"`))
-	abide.AssertReader(t, t.Name(), reader)
+	matchReaderSnapshot(t, reader)
 	mockedClient.AssertExpectations(t)
 }
 
 func Test_handler_streamLogs_happy_with_id(t *testing.T) {
 	id := "123456"
 	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, "GET", "/api/hosts/localhost/containers/"+id+"/logs/stream", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "/api/containers/logs/stream?container=localhost/"+id, nil)
 	q := req.URL.Query()
 	q.Add("stdout", "true")
 	q.Add("stderr", "true")
@@ -121,14 +124,14 @@ func Test_handler_streamLogs_happy_with_id(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	reader := strings.NewReader(regexp.MustCompile(`"time":"[^"]*"`).ReplaceAllString(rr.Body.String(), `"time":"<removed>"`))
-	abide.AssertReader(t, t.Name(), reader)
+	matchReaderSnapshot(t, reader)
 	mockedClient.AssertExpectations(t)
 }
 
 func Test_handler_streamLogs_happy_container_stopped(t *testing.T) {
 	id := "123456"
 	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, "GET", "/api/hosts/localhost/containers/"+id+"/logs/stream", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "/api/containers/logs/stream?container=localhost/"+id, nil)
 	q := req.URL.Query()
 	q.Add("stdout", "true")
 	q.Add("stderr", "true")
@@ -159,15 +162,61 @@ func Test_handler_streamLogs_happy_container_stopped(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	reader := strings.NewReader(regexp.MustCompile(`"time":"[^"]*"`).ReplaceAllString(rr.Body.String(), `"time":"<removed>"`))
-	abide.AssertReader(t, t.Name(), reader)
+	matchReaderSnapshot(t, reader)
 	mockedClient.AssertExpectations(t)
+}
+
+func Test_handler_streamLogs_container_stopped_ignores_previous_run(t *testing.T) {
+	id := "123456"
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, "GET", "/api/containers/logs/stream?container=localhost/"+id, nil)
+	q := req.URL.Query()
+	q.Add("stdout", "true")
+	q.Add("stderr", "true")
+	addAllLogLevels(q)
+
+	req.URL.RawQuery = q.Encode()
+	require.NoError(t, err, "NewRequest should not return an error.")
+
+	// a restarting container: FinishedAt is the previous run's stop, before this run started
+	started := time.Now().Add(-10 * time.Second).UTC()
+	previousStop := started.Add(-12 * time.Second)
+	mockedClient := new(MockedClient)
+	mockedClient.On("FindContainer", mock.Anything, id).Return(container.Container{ID: id, Host: "localhost", StartedAt: started, FinishedAt: previousStop}, nil)
+	mockedClient.On("ContainerLogs", mock.Anything, id, started, container.STDALL).Return(io.NopCloser(strings.NewReader("")), io.EOF).
+		Run(func(args mock.Arguments) {
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				cancel()
+			}()
+		})
+	mockedClient.On("Host").Return(container.Host{
+		ID: "localhost",
+	})
+	mockedClient.On("ListContainers", mock.Anything, mock.Anything).Return([]container.Container{
+		{ID: id, Name: "test", Host: "localhost", State: "running"},
+	}, nil)
+	mockedClient.On("ContainerEvents", mock.Anything, mock.AnythingOfType("chan<- container.ContainerEvent")).Return(nil)
+
+	handler := createDefaultHandler(mockedClient)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	m := regexp.MustCompile(`"name":"container-stopped"[^}]*"time":"([^"]*)"`).FindStringSubmatch(rr.Body.String())
+	if m == nil {
+		m = regexp.MustCompile(`"time":"([^"]*)"[^}]*"name":"container-stopped"`).FindStringSubmatch(rr.Body.String())
+	}
+	require.NotNil(t, m, "expected a container-stopped event, got %s", rr.Body.String())
+	stoppedAt, err := time.Parse(time.RFC3339Nano, m[1])
+	require.NoError(t, err)
+	assert.False(t, stoppedAt.Before(started), "stopped at %s, before this run started at %s", stoppedAt, started)
 }
 
 func Test_handler_streamLogs_search_status_exhausted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	id := "123456"
-	req, err := http.NewRequestWithContext(ctx, "GET", "/api/hosts/localhost/containers/"+id+"/logs/stream", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "/api/containers/logs/stream?container=localhost/"+id, nil)
 	require.NoError(t, err, "NewRequest should not return an error.")
 
 	q := req.URL.Query()
@@ -210,7 +259,7 @@ func Test_handler_streamLogs_search_status_on_error(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	id := "123456"
-	req, err := http.NewRequestWithContext(ctx, "GET", "/api/hosts/localhost/containers/"+id+"/logs/stream", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "/api/containers/logs/stream?container=localhost/"+id, nil)
 	require.NoError(t, err, "NewRequest should not return an error.")
 
 	q := req.URL.Query()
@@ -255,7 +304,7 @@ func Test_handler_streamLogs_error_reading(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	id := "123456"
-	req, err := http.NewRequestWithContext(ctx, "GET", "/api/hosts/localhost/containers/"+id+"/logs/stream", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "/api/containers/logs/stream?container=localhost/"+id, nil)
 	q := req.URL.Query()
 	q.Add("stdout", "true")
 	q.Add("stderr", "true")
@@ -286,13 +335,13 @@ func Test_handler_streamLogs_error_reading(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	reader := strings.NewReader(regexp.MustCompile(`"time":"[^"]*"`).ReplaceAllString(rr.Body.String(), `"time":"<removed>"`))
-	abide.AssertReader(t, t.Name(), reader)
+	matchReaderSnapshot(t, reader)
 	mockedClient.AssertExpectations(t)
 }
 
 func Test_handler_streamLogs_error_std(t *testing.T) {
 	id := "123456"
-	req, err := http.NewRequest("GET", "/api/hosts/localhost/containers/"+id+"/logs/stream", nil)
+	req, err := http.NewRequest("GET", "/api/containers/logs/stream?container=localhost/"+id, nil)
 
 	require.NoError(t, err, "NewRequest should not return an error.")
 
@@ -312,12 +361,12 @@ func Test_handler_streamLogs_error_std(t *testing.T) {
 	handler := createDefaultHandler(mockedClient)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
-	abide.AssertHTTPResponse(t, t.Name(), rr.Result())
+	matchHTTPSnapshot(t, rr.Result())
 }
 
 func Test_handler_between_dates(t *testing.T) {
 	id := "123456"
-	req, err := http.NewRequest("GET", "/api/hosts/localhost/containers/"+id+"/logs", nil)
+	req, err := containerLogsRequest("format=jsonl&container=localhost/" + id)
 	require.NoError(t, err, "NewRequest should not return an error.")
 
 	from, _ := time.Parse(time.RFC3339, "2018-01-01T00:00:00Z")
@@ -352,13 +401,13 @@ func Test_handler_between_dates(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	reader := strings.NewReader(regexp.MustCompile(`"time":"[^"]*"`).ReplaceAllString(rr.Body.String(), `"time":"<removed>"`))
-	abide.AssertReader(t, t.Name(), reader)
+	matchReaderSnapshot(t, reader)
 	mockedClient.AssertExpectations(t)
 }
 
 func Test_handler_between_dates_with_fill(t *testing.T) {
 	id := "123456"
-	req, err := http.NewRequest("GET", "/api/hosts/localhost/containers/"+id+"/logs", nil)
+	req, err := containerLogsRequest("format=jsonl&container=localhost/" + id)
 	require.NoError(t, err, "NewRequest should not return an error.")
 
 	from, _ := time.Parse(time.RFC3339, "2018-01-01T00:00:00Z")
@@ -406,56 +455,25 @@ func Test_handler_between_dates_with_fill(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	reader := strings.NewReader(regexp.MustCompile(`"time":"[^"]*"`).ReplaceAllString(rr.Body.String(), `"time":"<removed>"`))
-	abide.AssertReader(t, t.Name(), reader)
+	matchReaderSnapshot(t, reader)
 	mockedClient.AssertExpectations(t)
 }
 
-func Test_handler_between_dates_with_everything_complex(t *testing.T) {
-	id := "123456"
-	req, err := http.NewRequest("GET", "/api/hosts/localhost/containers/"+id+"/logs", nil)
-	require.NoError(t, err, "NewRequest should not return an error.")
-
-	q := req.URL.Query()
-	q.Add("jsonOnly", "true")
-	q.Add("stdout", "true")
-	q.Add("stderr", "true")
-	q.Add("everything", "true")
-
-	req.URL.RawQuery = q.Encode()
-
-	mockedClient := new(MockedClient)
-
-	first := makeMessage("2020-05-13T18:55:37.772853839Z INFO Testing stdout logs...\n", container.STDOUT)
-	second := makeMessage("2020-05-13T18:56:37.772853839Z {\"msg\":\"a complex log message\"}\n", container.STDOUT)
-	data := append(first, second...)
-
-	mockedClient.On("ContainerLogsBetweenDates", mock.Anything, id, mock.Anything, mock.Anything, container.STDALL).
-		Return(io.NopCloser(bytes.NewReader(data)), nil).
-		Once()
-	mockedClient.On("FindContainer", mock.Anything, id).Return(container.Container{ID: id}, nil)
-	mockedClient.On("Host").Return(container.Host{
-		ID: "localhost",
-	})
-	mockedClient.On("ListContainers", mock.Anything, mock.Anything).Return([]container.Container{
-		{ID: id, Name: "test", Host: "localhost", State: "running"},
-	}, nil)
-	mockedClient.On("ContainerEvents", mock.Anything, mock.AnythingOfType("chan<- container.ContainerEvent")).Return(nil)
-
-	handler := createDefaultHandler(mockedClient)
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	reader := strings.NewReader(regexp.MustCompile(`"time":"[^"]*"`).ReplaceAllString(rr.Body.String(), `"time":"<removed>"`))
-	abide.AssertReader(t, t.Name(), reader)
-	mockedClient.AssertExpectations(t)
+func concatMessages(messages ...string) []byte {
+	var data []byte
+	for _, message := range messages {
+		data = append(data, makeMessage(message, container.STDOUT)...)
+	}
+	return data
 }
 
-func Test_matchesFilter_inverse(t *testing.T) {
+func Test_logFilter_matches_inverse(t *testing.T) {
 	levels := map[string]struct{}{"info": {}}
 
-	regex, err := support_web.ParseRegex("INFO")
+	regex, err := search.ParseRegex("INFO")
 	require.NoError(t, err)
 
-	regex2, err := support_web.ParseRegex("ERROR")
+	regex2, err := search.ParseRegex("ERROR")
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -518,7 +536,7 @@ func Test_matchesFilter_inverse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := matchesFilter(tt.event, tt.regex, tt.levels, tt.inverse)
+			got := logFilter{regex: tt.regex, levels: tt.levels, inverse: tt.inverse}.matches(tt.event)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -531,4 +549,287 @@ func makeMessage(message string, stream container.StdType) []byte {
 	data = append(data, []byte(message)...)
 
 	return data
+}
+
+// The select loop is the only reader of its `events` channel, so it must never
+// be a writer to it. A container starting while a container-stopped sits in the
+// buffer used to deadlock the handler for good; it then stopped draining
+// newContainers, which backs up through the host service into the shared
+// container store and freezes it for every client on that host.
+func Test_handler_streamHostLogs_container_started_while_event_buffered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "/api/hosts/localhost/logs/stream", nil)
+	require.NoError(t, err)
+	q := req.URL.Query()
+	q.Add("stdout", "true")
+	q.Add("stderr", "true")
+	addAllLogLevels(q)
+	req.URL.RawQuery = q.Encode()
+
+	running := container.Container{ID: "aaaa", Name: "running", Host: "localhost", State: "running"}
+	starting := container.Container{ID: "bbbb", Name: "starting", Host: "localhost", State: "running"}
+
+	var (
+		releaseStopped = make(chan struct{}) // lets the running container's stream end
+		inNewContainer = make(chan struct{}) // handler is inside the newContainers case
+		releaseLookup  = make(chan struct{}) // lets that case finish
+		startEvent     = make(chan struct{}) // docker reports the new container
+		lookups        atomic.Int32
+	)
+
+	mockedClient := new(MockedClient)
+	mockedClient.On("Host").Return(container.Host{ID: "localhost"})
+	mockedClient.On("ListContainers", mock.Anything, mock.Anything).Return([]container.Container{running}, nil).Once()
+	mockedClient.On("ListContainers", mock.Anything, mock.Anything).Return([]container.Container{running, starting}, nil)
+	mockedClient.On("FindContainer", mock.Anything, "aaaa").Return(running, nil)
+	mockedClient.On("FindContainer", mock.Anything, "bbbb").Return(starting, nil).
+		Run(func(args mock.Arguments) {
+			// first lookup is the store adding the container; the second one is the
+			// handler's, on the select loop itself
+			if lookups.Add(1) == 2 {
+				close(inNewContainer)
+				<-releaseLookup
+			}
+		})
+	mockedClient.On("ContainerLogs", mock.Anything, "aaaa", mock.Anything, container.STDALL).
+		Return(io.NopCloser(strings.NewReader("")), io.EOF).
+		Run(func(args mock.Arguments) {
+			<-releaseStopped
+		})
+	mockedClient.On("ContainerLogs", mock.Anything, "bbbb", mock.Anything, container.STDALL).
+		Return(io.NopCloser(strings.NewReader("")), io.EOF)
+	mockedClient.On("ContainerEvents", mock.Anything, mock.AnythingOfType("chan<- container.ContainerEvent")).Return(nil).
+		Run(func(args mock.Arguments) {
+			eventCtx := args.Get(0).(context.Context)
+			events := args.Get(1).(chan<- container.ContainerEvent)
+			<-startEvent
+			events <- container.ContainerEvent{Name: "start", ActorID: "bbbb", Host: "localhost"}
+			<-eventCtx.Done()
+		})
+
+	handler := createDefaultHandler(mockedClient)
+	rr := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.ServeHTTP(rr, req)
+	}()
+
+	time.Sleep(300 * time.Millisecond) // handler is up and subscribed
+	close(startEvent)
+	<-inNewContainer
+	close(releaseStopped)              // container-stopped now occupies the buffer
+	time.Sleep(150 * time.Millisecond) // ...and has had time to get there
+	close(releaseLookup)
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler deadlocked when a container started while an event was buffered")
+	}
+
+	assert.Contains(t, rr.Body.String(), "container-started")
+	assert.Contains(t, rr.Body.String(), "bbbb")
+}
+
+// A finished k8s Job pod stays listed when "Show all containers" is on, so its
+// owner view must stream it too. Without all=1 only running containers qualify.
+func Test_handler_streamLogsWithLabels_all(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		all      bool
+		streamed bool
+	}{
+		{name: "running only by default", all: false, streamed: false},
+		{name: "finished included with all", all: true, streamed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			req, err := http.NewRequestWithContext(ctx, "GET", "/api/labels/job:hello/logs/stream", nil)
+			require.NoError(t, err)
+			q := req.URL.Query()
+			q.Add("stdout", "true")
+			q.Add("stderr", "true")
+			addAllLogLevels(q)
+			if tc.all {
+				q.Add("all", "1")
+			}
+			req.URL.RawQuery = q.Encode()
+
+			finished := container.Container{ID: "job1", Name: "hello", Host: "localhost", State: "exited", Labels: map[string]string{"job": "hello"}}
+			creating := container.Container{ID: "job2", Name: "hello", Host: "localhost", State: "created", Labels: map[string]string{"job": "hello"}}
+
+			streamed := make(chan struct{}, 1)
+			mockedClient := new(MockedClient)
+			mockedClient.On("Host").Return(container.Host{ID: "localhost"})
+			mockedClient.On("ListContainers", mock.Anything, mock.Anything).Return([]container.Container{finished, creating}, nil)
+			mockedClient.On("FindContainer", mock.Anything, "job1").Return(finished, nil)
+			mockedClient.On("FindContainer", mock.Anything, "job2").Return(creating, nil)
+			mockedClient.On("ContainerLogs", mock.Anything, "job1", mock.Anything, container.STDALL).
+				Return(io.NopCloser(strings.NewReader("")), io.EOF).
+				Run(func(args mock.Arguments) { streamed <- struct{}{} })
+			mockedClient.On("ContainerEvents", mock.Anything, mock.AnythingOfType("chan<- container.ContainerEvent")).Return(nil)
+
+			handler := createDefaultHandler(mockedClient)
+			rr := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				handler.ServeHTTP(rr, req)
+			}()
+
+			select {
+			case <-streamed:
+				assert.True(t, tc.streamed, "finished container should not be streamed without all=1")
+			case <-time.After(300 * time.Millisecond):
+				assert.False(t, tc.streamed, "finished container was never streamed with all=1")
+			}
+			cancel()
+			<-done
+			mockedClient.AssertNotCalled(t, "ContainerLogs", mock.Anything, "job2", mock.Anything, mock.Anything)
+		})
+	}
+}
+
+func TestPathParamDecodesOnce(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"plain", "/groups/payments", "payments"},
+		{"space", "/groups/Payments%20team", "Payments team"},
+		{"slash", "/groups/team%2Fpayments", "team/payments"},
+		{"percent", "/groups/100%25%20uptime", "100% uptime"},
+		{"literal escape", "/groups/a%2520b", "a%20b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			var gotErr error
+			r := chi.NewRouter()
+			r.Get("/groups/{group}", func(w http.ResponseWriter, r *http.Request) {
+				got, gotErr = pathParam(r, "group")
+			})
+			r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, tt.path, nil))
+			require.NoError(t, gotErr)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// storeHostService finds containers in one store per host and nothing else: its
+// embedded HostService is nil, so a stream that lists a host, or every host,
+// panics instead of passing.
+type storeHostService struct {
+	HostService
+	hosts map[string]container.ClientService
+}
+
+func (s *storeHostService) FindContainer(host, id string, labels container.ContainerLabels) (*container.ContainerService, error) {
+	client, ok := s.hosts[host]
+	if !ok {
+		return nil, fmt.Errorf("host %s not found", host)
+	}
+	c, err := client.FindContainer(context.Background(), id, labels)
+	if err != nil {
+		return nil, err
+	}
+	return container.NewContainerService(client, c), nil
+}
+
+func (s *storeHostService) SubscribeContainersStarted(context.Context, chan<- container.Container, container.ContainerFilter) {
+}
+
+func hostClient(host, id, message string) *MockedClient {
+	c := container.Container{ID: id, Name: id, Host: host, State: "running", StartedAt: time.Now()}
+	client := new(MockedClient)
+	client.On("Host").Return(container.Host{ID: host})
+	client.On("ListContainers", mock.Anything, mock.Anything).Return([]container.Container{c}, nil)
+	client.On("FindContainer", mock.Anything, id).Return(c, nil)
+	client.On("ContainerLogs", mock.Anything, id, mock.Anything, container.STDALL).
+		Return(io.NopCloser(bytes.NewReader(makeMessage(message, container.STDOUT))), nil)
+	client.On("ContainerEvents", mock.Anything, mock.AnythingOfType("chan<- container.ContainerEvent")).Return(nil)
+	return client
+}
+
+// A merged view can mix hosts: each container is found on the host its ref names,
+// and no host is listed to find it.
+func Test_handler_streamContainerLogs_across_hosts(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "/api/containers/logs/stream", nil)
+	require.NoError(t, err)
+	q := req.URL.Query()
+	q.Add("stdout", "1")
+	q.Add("stderr", "1")
+	addAllLogLevels(q)
+	q.Add("container", "nas/web")
+	q.Add("container", "pi/db")
+	q.Add("container", "pi/db") // a repeated ref is tailed once
+	req.URL.RawQuery = q.Encode()
+
+	nas := hostClient("nas", "web", "from nas\n")
+	pi := hostClient("pi", "db", "from pi\n")
+	h := createRouter(&handler{
+		hostService: &storeHostService{hosts: map[string]container.ClientService{
+			"nas": docker.NewService(nas, container.ContainerLabels{}),
+			"pi":  docker.NewService(pi, container.ContainerLabels{}),
+		}},
+		config: &Config{Base: "/", Authorization: Authorization{Provider: NONE}},
+	})
+
+	rr := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.ServeHTTP(rr, req)
+	}()
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	<-done
+
+	body := rr.Body.String()
+	assert.Contains(t, body, "from nas")
+	assert.Contains(t, body, "from pi")
+	pi.AssertNumberOfCalls(t, "ContainerLogs", 1)
+}
+
+func Test_handler_streamContainerLogs_bad_refs(t *testing.T) {
+	h := createDefaultHandler(nil)
+	for _, query := range []string{"", "&container=web", "&container=/web", "&container=nas/"} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest("GET", "/api/containers/logs/stream?stdout=1"+query, nil))
+		assert.Equal(t, http.StatusBadRequest, rr.Code, query)
+	}
+}
+
+// A whole-log read treats no levels as every level; the windowed fetch does not.
+func Test_logFilter_keeps(t *testing.T) {
+	regex, err := search.ParseRegex("timeout")
+	require.NoError(t, err)
+	hit := &container.LogEvent{Message: "a timeout", Level: "error"}
+	miss := &container.LogEvent{Message: "all good", Level: "error"}
+
+	none := logFilter{levels: map[string]struct{}{}}
+	assert.True(t, none.keeps(hit))
+	assert.False(t, none.matches(hit))
+
+	onlyErrors := logFilter{levels: map[string]struct{}{"error": {}}, regex: regex}
+	assert.True(t, onlyErrors.keeps(hit))
+	assert.False(t, onlyErrors.keeps(miss))
+
+	info := logFilter{levels: map[string]struct{}{"info": {}}}
+	assert.False(t, info.keeps(hit))
+
+	inverse := logFilter{levels: map[string]struct{}{}, regex: regex, inverse: true}
+	assert.False(t, inverse.keeps(hit))
+	assert.True(t, inverse.keeps(miss))
 }

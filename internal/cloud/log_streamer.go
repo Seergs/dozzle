@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/amir20/dozzle/internal/container"
-	container_support "github.com/amir20/dozzle/internal/support/container"
 	pb "github.com/amir20/dozzle/proto/cloud"
 	"github.com/rs/zerolog/log"
 )
@@ -49,7 +48,7 @@ func parseMinLevel(v string) (rank int, disabled bool, valid bool) {
 // streamer. MultiHostService and K8sClusterService both satisfy it.
 type LogStreamHostService interface {
 	ToolHostService
-	SubscribeContainersStarted(ctx context.Context, containers chan<- container.Container, filter container_support.ContainerFilter)
+	SubscribeContainersStarted(ctx context.Context, containers chan<- container.Container, filter container.ContainerFilter)
 }
 
 const (
@@ -176,7 +175,7 @@ func (ls *logStreamer) startReader(parent context.Context, c container.Container
 // runReader follows logs from a single container and pushes batches directly
 // to the cloud via ls.send. send() is serialised by the caller, so a slow
 // cloud connection backpressures all readers — this is intentional.
-func (ls *logStreamer) runReader(ctx context.Context, cs *container_support.ContainerService, minRank int) {
+func (ls *logStreamer) runReader(ctx context.Context, cs *container.ContainerService, minRank int) {
 	events := make(chan *container.LogEvent, logReaderChanBuffer)
 
 	streamErr := make(chan error, 1)
@@ -239,6 +238,11 @@ func (ls *logStreamer) runReader(ctx context.Context, cs *container_support.Cont
 			if msg == "" {
 				msg = messageToString(ev.Message)
 			}
+			// Clipped here as well as at the reader: a remote agent on an older
+			// version streams lines of any size, and a grouped entry grows by its
+			// JSON encoding. One entry past gRPC's 4MiB frame limit makes Cloud
+			// reset the whole stream, taking every other container with it.
+			msg = container.TruncateLogLine(msg)
 
 			tsNs := ev.Timestamp * int64(time.Millisecond) // LogEvent.Timestamp is UnixMilli
 			if tsNs == 0 {
@@ -248,6 +252,15 @@ func (ls *logStreamer) runReader(ctx context.Context, cs *container_support.Cont
 			level := ev.Level
 			if level == "unknown" {
 				level = ""
+			}
+
+			// Flush before appending, not after, so an entry never lands in a
+			// batch that is already full.
+			if len(batch) >= logBatchMaxEntries || batchBytes+len(msg) > logBatchMaxBytes {
+				if err := flush(); err != nil {
+					log.Debug().Err(err).Msg("log streamer: send failed")
+					return
+				}
 			}
 
 			batch = append(batch, &pb.LogBatchEntry{
@@ -261,13 +274,6 @@ func (ls *logStreamer) runReader(ctx context.Context, cs *container_support.Cont
 				LogId:         ev.Id,
 			})
 			batchBytes += len(msg)
-
-			if len(batch) >= logBatchMaxEntries || batchBytes >= logBatchMaxBytes {
-				if err := flush(); err != nil {
-					log.Debug().Err(err).Msg("log streamer: send failed")
-					return
-				}
-			}
 		}
 	}
 }

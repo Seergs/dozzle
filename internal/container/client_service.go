@@ -1,0 +1,78 @@
+package container
+
+import (
+	"context"
+	"io"
+	"time"
+
+	"github.com/amir20/dozzle/internal/imagecheck"
+)
+
+type ContainerFilter = func(*Container) bool
+
+// HostPruner is implemented by the ClientServices whose host can delete what
+// Reclaimable counts: docker, and an agent in front of one. PruneHost measures
+// again before it returns, so Host reports what is left.
+type HostPruner interface {
+	PruneHost(ctx context.Context, opts PruneOptions) (PruneResult, error)
+}
+
+// HostReclaimableLister is implemented by the ClientServices that can preview a
+// prune: docker, and an agent in front of one.
+type HostReclaimableLister interface {
+	ListReclaimable(ctx context.Context) (ReclaimableItems, error)
+}
+
+// HostResourceInspector is implemented by the ClientServices that can inspect
+// a host's networks and volumes: docker, and an agent in front of one.
+type HostResourceInspector interface {
+	InspectNetwork(ctx context.Context, name string) (Network, error)
+	InspectVolume(ctx context.Context, name string) (Volume, error)
+}
+
+// HealthProbe is one healthcheck run, as Docker keeps it in State.Health.Log.
+type HealthProbe struct {
+	Start    time.Time
+	End      time.Time
+	ExitCode int
+	Output   string
+}
+
+// HealthLogReader is implemented by the ClientServices that can read a
+// container's recent healthcheck runs from the engine: docker, and an agent in
+// front of one. The store never caches these, since every probe changes them
+// and a health_status event fires only when the status flips. Oldest first;
+// empty when the container has no healthcheck.
+type HealthLogReader interface {
+	HealthLog(ctx context.Context, c Container) ([]HealthProbe, error)
+}
+
+type ClientService interface {
+	FindContainer(ctx context.Context, id string, labels ContainerLabels) (Container, error)
+	ListContainers(ctx context.Context, filter ContainerLabels) ([]Container, error)
+	Host(ctx context.Context) (Host, error)
+	ContainerAction(ctx context.Context, container Container, action ContainerAction) error
+	UpdateContainer(ctx context.Context, container Container, progressCh chan<- UpdateProgress) (bool, error)
+	// RollbackContainer swaps the container back to the image it ran before
+	// its last update, reporting progress like UpdateContainer and closing
+	// progressCh when it returns.
+	RollbackContainer(ctx context.Context, container Container, opts RollbackOptions, progressCh chan<- UpdateProgress) error
+	CheckImageUpdate(ctx context.Context, container Container, force bool) (imagecheck.Result, error)
+	LogsBetweenDates(ctx context.Context, container Container, from time.Time, to time.Time, stdTypes StdType) (<-chan *LogEvent, error)
+	RawLogs(context.Context, Container, time.Time, time.Time, StdType) (io.ReadCloser, error)
+	// LogHistogram counts lines per bucket of width over [from, to). from and to
+	// must already be multiples of width.
+	LogHistogram(ctx context.Context, container Container, from time.Time, to time.Time, width time.Duration) (LogHistogram, error)
+
+	// Subscriptions
+	SubscribeStats(context.Context, chan<- ContainerStat)
+	SubscribeEvents(context.Context, chan<- ContainerEvent)
+	SubscribeContainersStarted(context.Context, chan<- Container)
+
+	// Blocking streaming functions that should be used in a goroutine
+	StreamLogs(context.Context, Container, time.Time, StdType, chan<- *LogEvent) error
+
+	// Terminal
+	Attach(context.Context, Container, ExecEventReader, io.Writer) error
+	Exec(context.Context, Container, []string, ExecEventReader, io.Writer) error
+}

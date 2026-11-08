@@ -5,39 +5,101 @@ toolbar:
   search: Поиск
   inverse-on: Исключить совпадения (инверсия)
   inverse-off: Включить совпадения (обычно)
+  invalid-regex: Некорректное регулярное выражение
+  close-search: Закрыть поиск
+  move-search: Перетащите, чтобы переместить
+  search-all-containers: Искать во всех контейнерах
   show: Показать только {std}
   show-all: Показать все потоки
   stop: Остановить
   start: Запустить
   restart: Перезапустить
+  rollout-restart: "Перезапустить {kind}"
+  rollout-restart-done: "{workload} разворачивает новые поды."
+  section-containers: "Контейнеры"
+  restart-all: "Перезапустить все"
+  stop-all: "Остановить все"
+  start-all: "Запустить все"
+  bulk-confirm-restart: "Перезапустить контейнеры: 1? | Перезапустить контейнеры: {count}?"
+  bulk-confirm-stop: "Остановить контейнеры: 1? | Остановить контейнеры: {count}?"
+  bulk-confirm-start: "Запустить контейнеры: 1? | Запустить контейнеры: {count}?"
+  bulk-self-skipped: "Собственный контейнер Dozzle пропускается."
+  bulk-more: "и ещё {count}"
+  bulk-failed: "Не выполнено для {names}"
   update: Обновить
   update-service: Обновить Сервис
   update-pulling: Загрузка последнего образа...
   update-recreating: Пересоздание контейнера...
+  update-verifying: Проверка, что новый контейнер продолжает работать...
+  update-rolled-back: Новый контейнер не смог стабильно работать, поэтому предыдущий восстановлен.
   update-done: Контейнер успешно обновлён
   update-up-to-date: Уже обновлён
-  update-available: 'Доступно обновление'
-  check-for-updates: 'Проверить обновления'
-  checking-for-updates: 'Проверка обновлений...'
-  no-updates: 'Обновлений нет'
-  dismiss-update: 'Скрыть это обновление'
-  view-release-notes: 'Посмотреть примечания к выпуску'
+  update-available: "Доступно обновление"
+  check-for-updates: "Проверить обновления"
+  checking-for-updates: "Проверка обновлений..."
+  no-updates: "Обновлений нет"
+  dismiss-update: "Скрыть это обновление"
+  view-release-notes: "Посмотреть примечания к выпуску"
   show-hostname: Показать имя хоста
   show-container-name: Показать имя контейнера
   shell: Оболочка
   attach: Подключить
+  inspect: "Инспектировать"
   copy-permalink: Скопировать постоянную ссылку
   copy-image: "Копировать тег образа"
+  image-version: "{image} сейчас соответствует {version}"
+  pin: "Закрепить"
+  unpin: "Открепить"
   copy-logs: Скопировать логи
   copy-filtered-logs: Скопировать отфильтрованные логи
   copying-logs: Копирование логов...
+  streams: Потоки
+  levels: Уровни
+  toggle-all-levels: Переключить все уровни
+  all: Все
+  none: Нет
+  section-logs: Логи
+  section-filters: Фильтры
+  section-display: Отображение
+  section-export: Экспорт
+  section-container: Контейнер
+  section-image: Образ
+  section-workload: "Рабочая нагрузка"
 action:
   copy-log: Копировать лог
   copy-link: Копировать постоянную ссылку
   see-in-context: Посмотреть в контексте
+  search-similar: Найти похожие
   show-details: Показать детали
   create-alert: Создать оповещение
+  ask-about-log: Спросить об этой строке
+log-details:
+  on-std: в {std}
+  image: Образ
+  raw-json: Исходный JSON
+  copy: Копировать
+  download: Скачать JSON
+  fields: Поля
+  field: Поле
+  value: Значение
+  fields-hint: Перетащите, чтобы изменить порядок. Переключите, чтобы показать или скрыть в потоке логов.
+  chart-field: "Построить график {field} в SQL-аналитике"
+  toggle-all: Переключить все поля
+  toggle-field: Показать или скрыть в потоке логов
+  memory-title: "Впервые в этом контейнере"
+  memory-explain: "Dozzle Cloud ещё не встречал этот шаблон в этом контейнере. Строки, отличающиеся только числами, идентификаторами или адресами, считаются одним шаблоном."
+  memory-pattern: "Шаблон"
+  memory-first-seen: "Впервые замечено"
+  memory-first-seen-now: "В этой строке"
+  memory-last-hour: "Последний час"
+  memory-lines: "Нет строк | 1 строка | {count} строк"
 label:
+  hide-sidebar: "Скрыть боковую панель"
+  show-sidebar: "Показать боковую панель"
+  host-unreachable: "недоступен"
+  agent-unreachable: "Не удаётся связаться с агентом по адресу {endpoint}"
+  agent-outdated: "агент {version}"
+  historical-at: "Исторические логи · {time}"
   containers: Контейнеры
   container: Нет контейнеров | 1 контейнер | {count} контейнеров
   alert-events: Нет событий | 1 событие | {count} событий
@@ -50,6 +112,7 @@ label:
   event-suppressed-hint: Dozzle Cloud нашёл совпадение, но удержал оповещение
   event-metric: Метрика
   event-container: Контейнер
+  memory-new: "Новое"
   host-count: Нет Хостов | 1 Хост | {count} Хостов
   service: Нет сервисов | 1 сервис | {count} сервисов
   services: Сервисы
@@ -57,20 +120,35 @@ label:
   all-containers: Все контейнеры
   all-namespaces: Все пространства имён
   namespaces: Пространства имён
+  owners: Владельцы
   host: Хост
   hosts: Хосты
   password: Пароль
   username: Имя пользователя
+  or: или
   container-name: Имя контейнера
   status: Статус
   created: Создан
-  avg-cpu: средний процессор (%)
-  avg-mem: средняя память (%)
+  avg-cpu: Средний ЦП
+  avg-mem: Средняя память
   name: Имя
   cpu: CPU
+  core: Нет ядер | 1 ядро | {count} ядер
+  disk: Диск
+  disk-io: "Дисковый ввод-вывод"
+  network: Сеть
+  reclaimable: Можно освободить
+  unused-images: "Неиспользуемые образы"
+  unused-volumes: "Неиспользуемые тома"
+  stopped-containers: "Остановленные контейнеры"
+  build-cache: "Кеш сборки"
+  load: Нагрузка
+  uptime: Время работы
   mem: MEM
   pinned: Закреплено
   per-page: Строк на странице
+  columns: "Столбцы"
+  moving-average: "Использовать скользящее среднее"
   sort-by: Сортировать по
   sort-direction: Изменить порядок сортировки
   host-menu: Хосты и Контейнеры
@@ -78,40 +156,78 @@ label:
   k8s-menu: Kubernetes
   group-menu: Пользовательские Группы
   no-logs: У контейнера еще нет логов
+  no-logs-hint: "Всё, что запишет контейнер, сразу появится здесь."
   search-status:
     searching: Поиск в старых логах…
-    searching-to: Поиск в старых логах… до {time}
-    capped: "{count} совпадений · поиск до {time}"
-    exhausted: Все логи просмотрены · {count} совпадений
-    empty: Нет совпадений · все логи просмотрены
+    matches: "{count} совпадений"
+    searched-all: "Все логи просмотрены"
+    scanned-to: "до {time}"
+    empty: "Нет подходящих логов"
+    empty-hint: "Просмотрены все логи. Попробуйте другой запрос или очистите поиск."
   show-all-containers: Показать все контейнеры
   collapse-all: Свернуть все
   collapse-group: Свернуть группу
   expand-all: Развернуть все
+  more-options: Дополнительные параметры
+  groups: Группы
 tooltip:
+  memory-new: "Dozzle Cloud ещё не видел эту ошибку в этом контейнере. Нажмите, чтобы увидеть её в контексте."
+  memory-new-since: "Впервые замечена в этом контейнере: {time}. Нажмите, чтобы увидеть, где она началась."
+  live-logs: Эти логи зафиксированы на этот момент времени. Нажмите, чтобы следить за живым потоком.
   search: Поиск контейнеров (⌘ + k, ⌃k)
   pin-column: Закрепить столбец
+  unpin-column: Открепить столбец
+  merge-stream: Объединить с потоком
+  merge-stream-hint: Откройте контейнер, чтобы объединить с ним
+  unmerge-stream: Убрать из потока
   merge-all: Объединить все в один поток
   network-io: "Сеть: ↑ {tx}/s · ↓ {rx}/s"
   disk-io: "Диск: ↑ {write}/s · ↓ {read}/s"
   cpu-usage: "ЦП {cpu}% / {cores} ядер"
   memory-usage: "Память {used} / {total}"
+  disk-layer: "Записываемый слой: {size}"
+  disk-volume-shared: "{name}: {size} (общий для {count} контейнеров)"
+  reclaimable-source: "Та же сумма, что показывает {command}."
   volumes: Тома
   volume-unreachable: недоступно с этого хоста
   volume-full: "{destination} заполнено на {pct}"
+  open-container-url: "Открыть {url}"
+  agent-version: "Агент Dozzle {version}"
+  agent-version-mismatch: "Агент {version} и Dozzle {current} работают на разных версиях. Используйте одну и ту же версию на обоих."
+popup:
+  group: Группа
+  ports: Порты
+container-status:
+  up: "Работает {duration}"
+  paused: "Приостановлен, работает {duration}"
+  restarting: "Перезапускается, остановлен {time}"
+  exited: "Завершён {time}"
+hint:
+  learn-more: Подробнее
+  dismiss: Больше не показывать
+link-hint:
+  title: Ссылка на контейнер
+  description: Dozzle покажет ссылку на веб-интерфейс контейнера, если добавить метку dev.dozzle.url. Добавьте это в compose-файл и перезапустите контейнер.
+  copy: Копировать
 error:
   page-not-found: Эта страница не доступна.
   host-group-not-found: "Хосты в группе «{name}» не найдены"
   invalid-auth: Имя пользователя или пароль неверны.
+  oauth-failed: Не удалось выполнить вход. Попробуйте ещё раз.
   copy-not-supported: Копирование в буфер обмена не поддерживается вашим браузером
-  copy-not-supported-hint: Буфер обмена недоступен. Скопируйте ссылку ниже
+  copy-insecure: Буфер обмена заблокирован по http
+  copy-insecure-hint: Браузер разрешает доступ к буферу обмена только по https. Скопируйте текст вручную.
   logs-skipped: Показать {total} скрытых записей
   container-not-found: Контейнер не найден.
+  container-not-found-hint: Возможно, он был удалён или его хост больше недоступен.
+  nothing-running: "Здесь ничего не запущено"
+  nothing-running-hint: "Ни один контейнер в этом представлении не запущен. Логи появятся здесь, как только какой-нибудь запустится."
   action-failed: Действие не выполнено
   update-failed: Обновление не выполнено
   unable-to-complete-action: Не удалось выполнить действие
   invalid-action: Недопустимое действие
   unable-to-update: Не удалось обновить контейнер
+  start-container-first: Сначала запустите контейнер
   something-went-wrong: Что-то пошло не так
   unknown-error: Неизвестная ошибка
   events-stream:
@@ -124,10 +240,9 @@ error:
       Dozzle UI превысил время ожидания при подключении к API. Пожалуйста, проверьте сетевое подключение и повторите попытку.
 alert:
   image-update:
-    title: 'Доступно обновление'
-    message: 'Для {image} опубликован более новый образ.'
+    title: "Доступно обновление"
+    message: "Для {image} опубликован более новый образ."
     enable-actions: '<a href="https://dozzle.dev/guide/actions" target="_blank" rel="noreferrer noopener">Включите действия</a>, чтобы загрузить его и пересоздать контейнер отсюда.'
-    self: 'Dozzle не может обновить сам себя — перезапустите его, чтобы применить обновление.'
   redirected:
     title: Перенаправлен на новый контейнер
     message: Dozzle автоматически перенаправил вас на новый контейнер {containerId}.
@@ -146,8 +261,11 @@ title:
   settings: Настройки
   notifications: Уведомления
 button:
+  back-to-dashboard: Вернуться на панель
+  live-logs: Перейти к живым логам
   logout: Выйти
   login: Войти
+  login-with: Продолжить с {provider}
   settings: Настройки
   cancel: Отмена
   redirect: Перенаправить
@@ -155,52 +273,64 @@ button:
   refresh: Обновить
 placeholder:
   search-containers: Поиск контейнеров (⌘ + k, ⌃k)
+  find-logs: Поиск в логах или regex
   search: Поиск
 settings:
-  show-image-update-alert: 'Показывать уведомление, когда у контейнера есть обновление'
-  show-image-update-alert-desc: 'Проверяет в реестре более новый тег запущенного образа.'
-  help-support: >
-    Пожалуйста, поддержите Dozzle, сделав пожертвование или спонсорство на GitHub. Ваши вклады помогают нам улучшать Dozzle для всех. Спасибо! 🙏🏼
-  about-desc: Информация о вашей установке Dozzle и о том, как поддержать проект.
-  display-desc: Настройте внешний вид логов и остальной части приложения. Предпросмотр отражает ваши изменения в реальном времени.
-  options-desc: Настройки языка, навигации и группировки.
+  subtitle: Настройки для этого браузера. Изменения сохраняются автоматически.
+  subtitle-server: "Настройки этого Dozzle, общие для всех, кто им пользуется."
+  appearance: Внешний вид
+  logs: Логи
+  sidebar: Боковая панель
+  behavior: Поведение
+  advanced: Дополнительно
+  about: О программе
+  general: Общие
+  updates: Обновления
+  security: "Безопасность"
+  hosts: "Хосты"
+  login-desc: "Кто может открыть Dozzle. Без входа любой, кто до него доберётся, читает ваши логи."
+  login-off: "Без входа"
+  login-docs: "Руководство по аутентификации"
+  set-by-flags: "В этом режиме задаётся флагами или переменными окружения."
+  hosts-found: "В этом режиме Dozzle сам находит эти хосты."
+  after-restart: "После перезапуска"
+  restart-pending: "Изменений после перезапуска: 1 | Изменений после перезапуска: {count}"
+  run-setup: "Запустить настройку снова"
+  run-setup-desc: "Пошаговый обход входа, действий, хостов, Dozzle Cloud и обновлений. Всё это есть и в Настройках."
+  reset: Сбросить настройки
+  sponsor: Поддержать
+  new-version: "Доступна версия {version}"
+  update-available: "Доступен более новый образ"
+  auto-update-on: "Dozzle обновляется сам"
+  show-image-update-alert: "Уведомления об обновлениях образов"
+  show-image-update-alert-desc: "Сообщать, когда у запущенного образа есть более новый тег."
   cloud-desc: Передавайте логи в Dozzle Cloud для аналитики с использованием ИИ и поиска по экземплярам.
-  support-title: Поддержать Dozzle
-  support-help: Пожертвования помогают сохранять Dozzle бесплатным и поддерживаемым. Спасибо 🙏
-  display: Вид
   locale: Язык
-  locale-desc: 'По умолчанию следует языку браузера.'
-  small-scrollbars: Уменьшенная полоса прокрутки
-  small-scrollbars-desc: 'Более тонкие полосы прокрутки, удобно на небольших экранах.'
+  small-scrollbars: Тонкие полосы прокрутки
+  small-scrollbars-desc: "Более тонкие полосы прокрутки, удобно на небольших экранах."
   show-timestamps: Показывать временные метки
-  show-timestamps-desc: 'Добавляет в начало каждой строки время её записи.'
-  soft-wrap: Плавный перенос текста
-  soft-wrap-desc: 'Переносит длинные строки вместо горизонтальной прокрутки.'
-  datetime-format: Формат даты и времени
-  datetime-format-desc: 'По умолчанию следует языку и формату времени браузера.'
+  show-timestamps-desc: "Показывает, когда была записана каждая строка."
+  soft-wrap: Перенос строк
+  soft-wrap-desc: "Переносить длинные строки вместо прокрутки вбок."
+  highlight-errors: Подсвечивать строки с ошибками
+  highlight-errors-desc: "Цветная метка уровня отображается всегда."
+  date-format: "Формат даты"
+  time-format: "Формат времени"
   font-size: Размер шрифта
-  font-size-desc: 'Влияет только на вывод логов, а не на остальной интерфейс.'
-  color-scheme: Цветовая схема
-  color-scheme-desc: 'Авто следует настройке системы.'
-  options: Опции
+  color-scheme: Тема
   show-stopped-containers: Показывать остановленные контейнеры
-  show-stopped-containers-desc: 'Показывать остановленные контейнеры в боковой панели и списках.'
-  group-containers: Группировать контейнеры по пространству имён
-  group-containers-desc: 'Группирует по проекту Compose, стеку Swarm или dev.dozzle.group.'
-  show-app-icons: 'Показывать значки приложений'
-  show-app-icons-desc: 'Сопоставлять известные образы с их логотипами. Значки поставляются вместе с Dozzle и никогда не загружаются из интернета.'
-  about: Информация
-  search: Включить поиск с помощью Dozzle, используя
-  search-desc: 'Ищет внутри логов контейнера, который вы просматриваете.'
-  using-version: Вы используете <a href="https://dozzle.dev/" target="_blank" rel="noreferrer noopener">Dozzle</a> {version}.
-  update-available: >-
-    Доступна новая версия! Обновить до <a href="{href}" target="_blank" rel="noreferrer noopener">{nextVersion}</a>.
+  group-containers: Группировать контейнеры
+  group-containers-desc: "По проекту Compose, стеку Swarm или dev.dozzle.group."
+  show-app-icons: "Значки приложений"
+  show-app-icons-desc: "Входят в состав Dozzle и никогда не загружаются из интернета."
+  search: Поиск по логам
+  search-desc: "Заменяет поиск браузера при просмотре контейнера."
   show-std: Показывать метки stdout и stderr
-  show-std-desc: 'Помечает, из stdout или stderr пришла строка.'
-  automatic-redirect: Автоматическое перенаправление на новые контейнеры с тем же именем.
-  automatic-redirect-desc: 'Когда контейнер заменён, перейти к новому.'
+  show-std-desc: "Помечает, из stdout или stderr пришла строка."
+  automatic-redirect: Следовать за пересозданными контейнерами
+  automatic-redirect-desc: "Когда контейнер заменён, переходить к новому."
   compact: Компактный режим
-  compact-desc: 'Уменьшает отступы между строками логов, чтобы их помещалось больше.'
+  compact-desc: "Меньшие отступы, чтобы на экране помещалось больше строк."
   size:
     small: Маленький
     medium: Средний
@@ -215,12 +345,12 @@ settings:
     none: Нет
   grouping:
     always: Всегда
-    at-least-2: Минимум 2
+    at-least-2: "Группы от 2"
     never: Никогда
   hour:
     auto: Авто
-    12: "12"
-    24: "24"
+    "12": "12-часовой"
+    "24": "24-часовой"
   log:
     preview: Это предварительный просмотр логов
     warning: Так выглядит лог предупреждения
@@ -238,16 +368,18 @@ releases:
   two_parts: "{first} и {second}"
   latest: Последняя
   no_releases: У вас последняя версия
-log_actions:
-  copy_log: Копировать лог
-  jump_to_context: Перейти к контексту
+  newer: "1 новая версия | Новых версий: {count}"
+  all: Все версии
+  updates_summary: "1 контейнер обновлён | Обновлено контейнеров: {count}"
+  agents_mismatched: "1 агент на другой версии | Агентов на другой версии: {count}"
 toasts:
   copied:
     title: Скопировано
     message: Лог скопирован в буфер обмена
 analytics:
   creating_table: Создание временной таблицы...
-  downloading: Получение логов контейнеров... ({size})
+  fetching_logs: Получение логов контейнеров
+  loading_engine: Загрузка SQL-движка
   evaluating_query: Выполнение запроса...
   total_records: Всего {count} записей.
   showing_first: Показаны первые {count}.
@@ -258,19 +390,98 @@ analytics:
   example_all: Все логи
   example_count: Количество строк
   example_group: Количество по {column}
+  example_by_container: По контейнерам
+  include_previous: "Включить старые контейнеры ({count})"
+  containers_count: "Контейнеры: {count}"
   export: Экспорт
   export_csv: Скачать CSV
   export_json: Скачать JSON
+  query: Запрос
+  run: Выполнить
+  results: Результаты
+  min: Мин
+  avg: Сред
+  max: Макс
+  p50: P50
+  p95: P95
+  distribution_of: "Распределение {column}"
+  rows: 1 строка | {count} строк
+updates:
+  title: Обновления
+  count: 1 обновление | {count} обновлений
+  available: 1 обновление доступно | {count} обновлений доступно
+  running: Обновление…
+  subtitle: Эти контейнеры используют более старый образ, чем предлагает их реестр.
+  subtitle-running: Каждый хост обновляет по одному контейнеру за раз.
+  none: Все контейнеры используют последний образ своего тега.
+  update-selected: Обновить | Обновить 1 | Обновить {count}
+  self-last: Dozzle обновляется последним и затем перезапускается.
+  read-only: Для обновления отсюда нужны действия с контейнерами и роль update.
+  auto: Авто
+  auto-hint: Также обновляется по расписанию автообновления
+  auto-footnote: Добавьте контейнеру метку {label}, чтобы он обновлялся по расписанию автообновления.
+  check-only: Есть метка {label}, поэтому он обновляется вне Dozzle.
+  scheduled-running: Сейчас выполняется автообновление по расписанию.
+  progress: Готово {done} из {total}
+  back: Назад
+  busy: Другое обновление уже выполняется.
+  summary: "Обновлено: {updated}"
+  summary-failed: "Обновлено: {updated}, с ошибкой: {failed}"
+  status:
+    queued: В очереди
+    pulling: Загрузка
+    recreating: Пересоздание
+    verifying: Проверка
+    done: Обновлён
+    rolled-back: Откачено
+    up-to-date: Актуален
+    error: Ошибка
+  release-notes: Примечания к выпуску
+  version:
+    rebuilt: пересобран
+    unknown: Версия неизвестна ({reason})
+    undeclared: образ её не указывает
+    rate-limited: лимит запросов к реестру
+    auth: реестру нужен вход
+    failed: ошибка запроса
 drawer:
   maximize: Развернуть
   restore: Восстановить
+terminal:
+  connecting: Подключение
+  connected: Подключено
+  closed: Отключено
+  connection-closed: Соединение закрыто
+  not-running: Контейнер не запущен
+  reconnect: Переподключиться
+  attaching: Подключение к {name}
+  decrease-font: Уменьшить размер шрифта
+  increase-font: Увеличить размер шрифта
+  search: Поиск
+  no-results: Ничего не найдено
+  previous-match: Предыдущее совпадение
+  next-match: Следующее совпадение
+  close-search: Закрыть поиск
 notifications:
+  history:
+    title: Активность
+    loading: Загрузка активности…
+    failed: Не удалось загрузить активность.
+    empty: Недавно ничего не срабатывало.
+    still-happening: всё ещё происходит
+    events: "{n} событий"
+    suppressed: "· {n} подавлено"
+    show-lines: Показать строки
+    show-moment: Показать логи вокруг
+    open-in-cloud: Открыть в Dozzle Cloud
+    fired-recently: раз за последнее время
   title: Уведомления
   description: Настройте где и когда получать оповещения
   destinations: Назначения
   add-destination: Добавить назначение
   alerts: Оповещения
   add-alert: Добавить оповещение
+  new-alerts: Новые оповещения
   prefill-name: Оповещения об ошибках
   prefill-expression: level == "error"
   add: Добавить
@@ -279,6 +490,7 @@ notifications:
     enabled: Включены ({count})
     paused: Приостановлены ({count})
   no-alerts: Оповещения ещё не настроены. Создайте одно для начала.
+  no-alerts-in-filter: Нет оповещений, соответствующих этому фильтру.
   default-alert-created: Мы создали для вас оповещение по умолчанию. Вы получите уведомление, когда контейнер завершится с ошибкой. Его можно изменить или приостановить в любой момент.
   default-alert-failed: Не удалось создать оповещение автоматически. Воспользуйтесь формой ниже.
   alert:
@@ -291,54 +503,122 @@ notifications:
     sample-window: Окно выборки
     destination: Назначение
     dispatcher-deleted: Диспетчер удалён
-    containers-count: "{count} контейнеров"
-    triggered-count: "{count} сработало"
+    containers-count: "в 1 контейнере | в {count} контейнерах"
+    triggered-count: "Сработало 1 раз | Сработало {count} раз"
+    never-triggered: Ни разу не сработало
     last-triggered: "Последнее: {time}"
+    delete-warning: Удалить это оповещение?
+    delete-cancel: Оставить
+    delete-confirm: Удалить
+    window-meta: "окно {duration}"
+    cooldown-meta: "пауза {duration}"
   destination:
     http-webhook: HTTP Webhook
     dozzle-cloud: Dozzle Cloud
     edit: Редактировать
     duplicate: Дублировать
     delete: Удалить
+    used-by: "Используется в 1 оповещении | Используется в {count} оповещениях"
+    unused: Не используется ни в одном оповещении
+    copy-of: "Копия {name}"
+    copy-failed: Не удалось продублировать это назначение
+    delete-failed: Не удалось удалить это назначение
+    delete-warning: Удалить это назначение?
+    delete-warning-used: "1 оповещение отправляет сюда и перестанет уведомлять. | {count} оповещений отправляют сюда и перестанут уведомлять."
+    delete-cancel: Оставить
+    delete-confirm: Удалить
   alert-form:
     create-title: Создать Оповещение
     edit-title: Редактировать Оповещение
-    description: Подпишитесь на события логов, соответствующие вашим критериям
+    description-log: Получайте уведомления, когда в логах контейнеров появляются подходящие строки
+    description-metric: Получайте уведомления, когда CPU, память или диск контейнера превышают порог
+    description-event: Получайте уведомления, когда контейнеры запускаются, останавливаются, падают или меняют состояние
+    required: Обязательно
+    still-needed: "Ещё нужно: {fields}"
+    missing:
+      container-expression: контейнеры
+      condition: условие
+      destination: назначение
+      name: имя
     alert-name: Имя Оповещения
     alert-name-placeholder: напр., Ошибки Тестового API
-    container-filter: Фильтр Контейнеров
-    containers-match: "{count} контейнеров соответствует: {names}"
-    no-containers-match: Нет контейнеров, соответствующих этому фильтру
-    log-filter: Фильтр Логов
-    logs-match: "{count} логов соответствует"
-    no-logs-match: Нет логов, соответствующих этому фильтру
+    alert-name-hint: Показывается на карточке оповещения и в каждом отправленном уведомлении.
+    container-filter: Контейнеры
+    container-filter-hint: За какими контейнерами следит это оповещение. Учитываются только запущенные контейнеры.
+    containers-match: "Подходит 1 запущенный контейнер: {names} | Подходит {count} запущенных контейнеров: {names}"
+    no-containers-match: Ни один запущенный контейнер не подходит под этот фильтр
+    checking: Проверка…
+    examples: "Примеры:"
+    use-example: Использовать этот пример
+    seconds-unit: сек
+    log-filter: Условие по логам
+    log-filter-hint: Какие строки логов вызывают оповещение.
+    logs-match: "1 подходящая строка за последние {window} | {count} подходящих строк за последние {window}"
+    no-logs-match: Нет подходящих строк за последние {window}
+    log-preview-hint: Напишите условие, чтобы увидеть, какие недавние строки логов вызвали бы это оповещение.
+    log-scan-note: "Предпросмотр просмотрел первый подходящий контейнер. | Предпросмотр просмотрел первые {count} подходящих контейнеров."
+    preview-needs-containers: Сначала выберите контейнеры, чтобы увидеть предпросмотр на реальных данных.
+    preview-fix-expression: Исправьте выражение, чтобы увидеть предпросмотр.
     destination: Назначение
-    select-destination: Выберите назначение
-    no-destinations: Назначения не настроены. Сначала добавьте одно.
+    no-destinations: Назначения ещё не настроены.
     preview: Предпросмотр
     cancel: Отмена
     save: Сохранить
     create: Создать Оповещение
-    metric-filter: Выражение метрики
-    expression-valid: Выражение корректно
-    metric-fields-hint: "Доступные поля: {fields}"
+    discard-title: Отменить это оповещение?
+    discard-keep: Продолжить редактирование
+    discard-confirm: Отменить
+    metric-filter: Условие по метрикам
+    metric-filter-hint: "Сравнивайте cpu (%), memory (%), memoryUsage (байты) или свободное место в mounts."
+    metric-preview-hint: Напишите условие, чтобы увидеть текущее состояние ваших контейнеров.
+    metric-preview-note: На основе последних {duration} статистики, собранной Dozzle.
+    metric-container: Контейнер
+    metric-cpu: CPU
+    metric-memory: Память
+    metric-window-match: Окно
+    metric-firing: Сработает
+    metric-matching-now: Сейчас выше
+    metric-no-samples: Нет данных
+    metric-no-samples-hint: Для подходящих контейнеров статистика ещё не собрана.
+    metric-would-fire: "Сейчас сработало бы для 1 контейнера | Сейчас сработало бы для {count} контейнеров"
+    metric-would-not-fire: Сейчас ни один контейнер не превышает порог
     sample-window-label: Окно выборки
-    sample-window-hint: "Оповещение срабатывает, когда условие выполняется в течение {duration}"
+    sample-window-hint: "Срабатывает, когда условие держится {duration}"
     cooldown-label: Период ожидания
     cooldown-hint: "{duration} между оповещениями на контейнер"
     no-cooldown: Без периода ожидания
+    immediate-label: "Отправлять сразу"
+    immediate-hint: "Доставляет каждое совпадение сразу, без проверки Dozzle Cloud, в пределах дневного лимита оповещений вашего тарифа."
     alert-type: Тип оповещения
     log-alert: Оповещение журнала
     metric-alert: Оповещение метрики
     event-alert: Оповещение о событии
-    event-filter: Выражение события
-    event-fields-hint: "Доступные поля: {fields}"
+    log-alert-description: Совпадения строк в логах контейнеров
+    metric-alert-description: Следить за CPU, памятью и диском
+    event-alert-description: Реагировать на запуски, остановки и смену состояния
+    type-switch-warning: Сохранение заменит условие «{type}» этого оповещения, и оно будет потеряно.
+    event-filter: Условие по событиям
+    event-filter-hint: Какие события контейнеров вызывают оповещение.
+    event-matches: "Подходит 1 из этих событий | Подходит {count} из этих событий"
+    event-matches-none: Не подходит ни одно из этих событий
+    event-preview-hint: Напишите условие, чтобы увидеть, какие события контейнеров оно поймает.
+    event-preview-note: Примеры событий, а не история. События Docker проверяются по мере их появления.
   destination-form:
     create-title: Добавить Назначение
     edit-title: Редактировать Назначение
     description: Куда отправлять уведомления?
     name: Имя
     name-placeholder: напр., Продакшн Slack
+    name-hint: Так это назначение отображается при выборе для оповещения.
+    name-taken: Другое назначение уже занимает это имя.
+    still-needed: "Ещё нужно: {fields}"
+    missing:
+      name: имя
+      url: URL вебхука
+      template: шаблон
+    discard-title: Отменить это назначение?
+    discard-keep: Продолжить редактирование
+    discard-confirm: Отменить
     type: Тип
     webhook-title: HTTP Webhook
     webhook-description: Slack, Discord, пользовательская конечная точка
@@ -346,21 +626,37 @@ notifications:
     cloud-description: Push-уведомления, email-оповещения и сводки на основе ИИ
     webhook-url: URL Webhook
     webhook-url-placeholder: https://hooks.foo.com/services/...
+    webhook-url-invalid: Введите полный адрес http:// или https://.
     api-key: API Ключ
-    payload-format: Формат Payload
+    payload-format: Тело запроса
     format-slack: Slack
     format-discord: Discord
     format-ntfy: ntfy
     format-custom: Пользовательский
+    format-replace-warning: Это заменит написанный вами шаблон.
+    format-replace-confirm: Заменить
     template: Шаблон
     template-hint: Синтаксис шаблона Go
+    template-placeholder: Тело JSON с подстановками шаблона Go
+    payload-mode-json: Корректный JSON. Каждое значение отрисовывается и экранируется за вас.
+    payload-mode-raw: Это не JSON, поэтому всё тело отправляется как отрисованный текст.
+    payload-mode-unbalanced: Незакрытая конструкция шаблона.
+    payload-mode-empty: Пустой шаблон отправляет уведомление целиком в JSON.
+    variables: Доступные переменные
+    variables-all: Все оповещения
+    variables-log: Только оповещения по логам
+    variables-metric: Только оповещения по метрикам
+    variables-event: Только оповещения по событиям
+    variables-scope-hint: Поля вне раздела «Все оповещения» заполнены только для своего типа; в другом типе отправка завершится ошибкой.
     headers: Пользовательские Заголовки
     headers-hint: Необязательные HTTP-заголовки (напр. Authorization)
     header-name: Имя заголовка
     header-value: Значение заголовка
     add-header: Добавить Заголовок
+    remove-header: Удалить заголовок
     test: Тест
     test-success: Тест успешен
+    test-unsupported: "Этот шаблон не работает для оповещений типа {kinds}, поэтому они не будут сюда отправлены."
     cancel: Отмена
     close: Закрыть
     save: Сохранить
@@ -368,13 +664,10 @@ notifications:
     cloud-exists: Dozzle Cloud уже привязан
     link-cloud: Связать Аккаунт
     link-cloud-button: Связать Dozzle Cloud
-    cloud-settings-hint: Чтобы настроить управляемые каналы, перейдите в
     cloud-settings-link: Настройки Dozzle Cloud
     cloud-checking: Проверка статуса облака...
     cloud-relink: Ваш API-ключ недействителен или истёк. Пожалуйста, удалите и привяжите аккаунт заново.
     cloud-unavailable: Dozzle Cloud временно недоступен. Попробуйте позже.
-    cloud-plan: План
-    cloud-usage: События за этот период
   empty-state:
     title: Начните с уведомлений
     description: Выберите, как вы хотите получать оповещения, когда ваши контейнеры требуют внимания.
@@ -386,12 +679,20 @@ notifications:
 cloud:
   title: Dozzle Cloud
   description: Управляйте контейнерами удалённо и используйте ИИ для расследования проблем в вашем кластере.
+  pitch:
+    findings: Ежедневный ИИ-анализ ваших ошибок и предупреждений
+    alerts: Оповещения в реальном времени о сбоях и превышении порогов
+    control: Запускайте, останавливайте и проверяйте контейнеры откуда угодно
   learn-more: Узнать больше
   link-instance: Привязать экземпляр
   relink-instance: Привязать повторно
   connected: Подключён
+  pro-badge: Dozzle Cloud Pro
+  locked-on-this-plan: Доступно в Dozzle Cloud Pro
   plan: План
-  usage: События за этот период
+  usage: События
+  usage-agent-messages: Чаты с агентом
+  usage-log-bytes: Проиндексированные данные
   dashboard: Панель управления
   settings: Настройки
   error: Ошибка подключения. Пожалуйста, привяжите экземпляр повторно.
@@ -399,6 +700,7 @@ cloud:
   unlink: Отвязать
   unlink-confirm: Вы уверены, что хотите отвязать от Dozzle Cloud? Это удалит все облачные назначения уведомлений.
   privacy:
+    details-link: "Что отправляется"
     toggle: "Передавать логи и метрики в Dozzle Cloud"
     sends-heading: "Пока эта опция включена, ваши контейнеры постоянно отправляют:"
     sends-logs: "Строки логов по мере их записи"
@@ -406,7 +708,7 @@ cloud:
     never-heading: "Никогда не отправляется:"
     never-env: "Переменные окружения"
     off-note: "Отключите, чтобы логи и метрики оставались на этом экземпляре. Настроенные оповещения продолжат приходить, а удалённый доступ к контейнерам продолжит работать."
-    per-container: "Исключить отдельный контейнер меткой: dev.dozzle.cloud.min_level=disabled"
+    per-container: "Остановить логи отдельного контейнера меткой: dev.dozzle.cloud.min_level=disabled"
     required-for: "Требуется для расследований с помощью ИИ, поиска по логам и истории ресурсов."
   welcome:
     watching-title: "Cloud следит за вашими логами, чтобы вам не приходилось"
@@ -434,10 +736,12 @@ cloud:
     alerts-go-to: "Оповещения приходят на"
     your-cloud-account: "ваш аккаунт Cloud"
     change: "Изменить"
+    chat-also: "Получайте их и на телефон в Telegram или Discord."
+    chat-connect: "Подключить"
     turn-on: "Включить 1 оповещение | Включить {count} оповещений"
     turn-on-short: "Включить"
     continue-without: "Продолжить без оповещений"
-    skip-alerts: "Не сейчас, присылайте только ежедневные расследования"
+    skip-alerts: "Не сейчас"
     ready: "Готово"
     done-title: "Всё настроено"
     done-body: "Вот где появляется каждый вид уведомлений."
@@ -451,19 +755,101 @@ cloud:
     where-tuning: "Настройка по контейнерам"
     where-tuning-detail: "Сузьте, приглушите или удалите любое правило на странице уведомлений."
     done: "Готово"
+    steps:
+      watching: "Что делает Cloud"
+      alerts: "Оповещения в реальном времени"
+      done: "Где всё появляется"
     signals:
       exited: "Контейнер завершился с ошибкой"
       unhealthy: "Контейнер стал unhealthy"
       oom: "Убит ядром (OOM)"
       restart: "Контейнер перезапущен"
+      updated: "Контейнер обновлён Dozzle"
       cpu: "CPU выше 90% в течение 5 минут"
       memory: "Память выше 90% в течение 5 минут"
       disk: "Том заполнен более чем на 85%"
       disk-free: "На томе меньше 1 ГБ свободно"
       fatal: "Любая строка fatal"
       error: "Любая строка error"
+cloud-rail:
+  title: Dozzle Cloud
+  chat: Спросить Dozzle
+  metrics: Метрики
+  alerts: Оповещения
+  close: Закрыть
+  hide: Скрыть панель облака
+  show: Показать панель облака
+  alerts-empty-here: По тому, что вы смотрите, ничего не срабатывало.
+  all-activity: Вся активность
+  metrics-no-container: Откройте контейнер, чтобы увидеть его историю.
+  metrics-loading: Загружаю историю…
+  metrics-failed: Не удалось загрузить историю.
+  metrics-empty: За этот период данных ещё нет.
+  metrics-peak: пик
+  metrics-bucket: средние за {duration}
+  window-1h: 1 ч
+  window-6h: 6 ч
+  window-24h: 24 ч
+  window-7d: 7 д
+cloud-chat:
+  title: Спросить Dozzle
+  close: Закрыть
+  clear: Очистить чат
+  empty: Спросите о том, что видите. Ассистент видит этот экран и читает эти логи.
+  thinking: Думает…
+  doing:
+    logs: Читаю логи…
+    containers: Смотрю контейнеры…
+    stats: Проверяю потребление ресурсов…
+    inspect: Изучаю контейнер…
+    notifications: Проверяю уведомления…
+    action: Выполняю действие…
+    working: Работаю…
+  step:
+    logs: Поиск по логам
+    containers: Просмотр контейнеров
+    stats: Проверка использования ресурсов
+    inspect: Инспекция контейнера
+    alerts: Просмотр оповещений
+    findings: Просмотр находок
+    events: Проверка истории контейнера
+    docs: Чтение документации
+    notifications: Проверка уведомлений
+    action: Выполнение действия
+  phase:
+    reading: Чтение вопроса
+    reviewing: Разбор найденного
+    writing: Написание ответа
+    retrying: Дольше обычного, повторная попытка
+  found: "найдено: {n}"
+  nothing-found: ничего не найдено
+  worked-for: "Работа: {time}"
+  earlier: "ранее: {n}"
+  placeholder: Спросить об этих логах
+  historical: история
+  n-containers: "Контейнеров: {n}"
+  evidence: Отправляется с вопросом
+  lines-in-view: "{n} строк на экране"
+  this-log: Эта строка лога
+  remove-log: Убрать эту строку
+  send: Отправить
+  suggest-summarize: "Кратко: что здесь происходит"
+  suggest-errors: Найди ошибки и предупреждения
+  suggest-next: На что посмотреть дальше?
+  error-unavailable: Ассистент сейчас недоступен.
+  error-not-configured: Dozzle Cloud не подключён, спрашивать некого.
+  section-ask: Ассистент
+  ask-for: Спросить Dozzle про {query}
+  ask-hint: Отвечает по контейнерам на экране
+  ask-shortcut: чтобы спросить
 cloud-search:
   containers-section: "Контейнеры"
+  section-logs: "Логи"
+  no-matches: "Нет подходящих контейнеров или команд"
+  nav-hint: "навигация"
+  pin-shortcut: "закрепить столбец"
+  merge-shortcut: "объединить в поток"
+  unmerge-shortcut: "убрать из потока"
   search-logs-for: 'Поиск логов по "{query}"'
   across-containers: "проиндексированных по всем вашим контейнерам"
   connect-to-enable: "Подключите Dozzle Cloud, чтобы искать в логах"
@@ -471,27 +857,26 @@ cloud-search:
   open-container: "открыть контейнер"
   search-logs-shortcut: "поиск логов"
   cloud-connected: "Cloud подключён"
+  cloud-error: "Ошибка подключения к Cloud"
   results-page-title: "Поиск по логам"
   no-results: "Совпадений в логах не найдено."
   search-failed: "Поиск в Cloud не удался."
   search-empty-prompt: "Введите запрос для поиска по логам."
   searching: "Поиск…"
   hits-count: "{n} результатов"
-  window-suffix: "за последние 14 дней"
+  window-since: "с {time}"
   hero-title-cloud: "Поиск по контейнерам и логам"
   hero-title-plain: "Поиск по контейнерам"
   hero-pill-indexed: "Индекс Cloud"
   modal-placeholder-cloud: "Поиск по контейнерам и логам…"
   modal-placeholder-plain: "Поиск по контейнерам…"
-  col-time: "Время"
-  col-level: "Уровень"
-  col-container: "Контейнер"
-  col-message: "Сообщение"
   container-removed: "Контейнер был удалён"
   cta-settings: "Настройки Cloud"
   container-removed-pill: "удалён"
 command-palette:
   section-commands: Команды
+  section-recent: "Недавние"
+  run-hint: "выполнить команду"
   restart-container: Перезапустить {name}
   stop-container: Остановить {name}
   start-container: Запустить {name}
@@ -506,3 +891,352 @@ command-palette:
   toggle-std: Переключить метки stdout/stderr
   toggle-scrollbars: Переключить уменьшенные полосы прокрутки
   open-settings: Открыть настройки
+  section-updates: "Доступны обновления"
+  section-hosts: "Хосты"
+  open-analytics: "Открыть анализ логов"
+  clear-logs: "Очистить логи"
+  attach-shell: "Подключиться к {name}"
+  exec-shell: "Открыть оболочку в {name}"
+  open-assistant: "Спросить ассистента"
+  check-container-updates: "Проверить обновления для {name}"
+  skip-update: "Пропустить это обновление для {name}"
+  review-updates: "Просмотреть обновления: 1 | Просмотреть обновления: {count}"
+  confirm-stop: "Нажмите ↵ ещё раз, чтобы остановить {name}"
+  confirm-update: "Нажмите ↵ ещё раз, чтобы обновить {name}"
+  confirm-hint: "подтвердить"
+  open-settings-page: "Настройки: {page}"
+  open-notifications: "Открыть уведомления"
+  open-logs: "Открыть логи"
+  state-on: "Вкл"
+  state-off: "Выкл"
+  prefix-commands: "команды"
+  prefix-hosts: "хосты"
+  prefix-ask: "спросить"
+  actions-hint: "действия"
+  actions-placeholder: "Фильтр действий…"
+  back-hint: "назад"
+setup:
+  title: Настройка Dozzle
+  next: Далее
+  back: Назад
+  finish-later: Завершить позже
+  close: Закрыть
+  copy: Копировать
+  steps:
+    login: Вход
+    login-note: Сделайте это первым
+    actions: Действия и оболочка
+    cloud: Dozzle Cloud
+    cloud-note: Необязательно
+    hosts: "Хосты"
+    hosts-note: "Необязательно"
+    update: "Автообновление"
+    update-note: "Нужны действия"
+    restart: Перезапуск
+  login:
+    title: Включить вход
+    subtitle: Любой, кто может открыть Dozzle, может читать ваши логи. Закройте доступ прежде всего.
+    no-data-title: /data не смонтирован
+    no-data-body: Пользователи и настройки сохраняются в /data. Без тома они пропадут при следующем пересоздании контейнера. Смонтируйте том и проверьте снова.
+    check-again: Проверить снова
+    tab-account: Аккаунт Dozzle
+    tab-proxy: Мой прокси
+    tab-oidc: OIDC
+    username: Имя пользователя
+    email: Email
+    optional: (необязательно)
+    password: Пароль
+    confirm: Подтвердите пароль
+    password-hint: Не менее 8 символов. В имени пользователя допустимы буквы, цифры, точки, дефисы и подчёркивания.
+    mismatch: Пароли не совпадают.
+    saved-volume: Сохранено в смонтированный том
+    after-restart: Вход включится после перезапуска
+    on: Вход включён
+    users-exist: Файл users.yml уже существует. Чтобы использовать его, установите провайдер аутентификации simple.
+    create-account: Создать аккаунт
+    proxy-body: Authelia, Authentik, Cloudflare Access и подобные сервисы выполняют вход пользователей, а затем передают имя пользователя в Dozzle в заголовке Remote-User.
+    proxy-warning-title: Публикуйте только прокси
+    proxy-warning-body: Dozzle доверяет этому заголовку от кого угодно. Если собственный порт Dozzle доступен, любой может выдать себя за любого пользователя.
+    proxy-docs: Руководство по forward proxy
+    use-proxy: Использовать мой прокси
+    oidc-body: Для OIDC нужен секрет клиента, поэтому здесь ничего не сохраняется. Добавьте эти переменные в compose-файл и пересоздайте контейнер.
+    oidc-docs: Руководство по OpenID Connect
+    skip: "Продолжить без входа"
+    manual-restart: Dozzle не может перезапустить себя здесь. Перезапустите контейнер, чтобы включить вход, или задайте это в compose-файле.
+    restart-hint: Вы попадёте на страницу входа. Настройка продолжится после входа.
+  actions:
+    title: Действия и оболочка
+    subtitle: Решите, что Dozzle разрешено делать с вашими контейнерами.
+    example-status: Завершён (1) 2 минуты назад
+    example-restart: Перезапустить
+    example: "Пример"
+    actions-label: Запуск, остановка и перезапуск
+    actions-desc: Почините упавший контейнер прямо на странице, где нашли ошибку.
+    shell-label: Оболочка
+    shell-desc: Подключиться к контейнеру или выполнять в нём команды.
+    shell-warning: Доступ к оболочке контейнера часто равносилен доступу к хосту. Не включайте, если он не нужен.
+    locked: "Задано через {env}"
+    window-closed: "Без входа настройка принимает изменения только в первые 15 минут новой установки. Задайте эти параметры переменными окружения или сначала включите вход."
+    window-closed-env: "Без входа настройка принимает изменения только в первые 15 минут новой установки. Задайте {envs} в файле compose или сначала включите вход."
+    no-access: Ваш аккаунт не может изменять эти настройки.
+    restart-note: Изменения вступят в силу после перезапуска Dozzle.
+  hosts:
+    title: "Добавить ещё один хост"
+    subtitle: "Смотрите контейнеры других машин в этом Dozzle. Запустите агент на каждой из них и добавьте здесь его адрес."
+    run-title: "Запустите агент"
+    run-body: "На другой машине добавьте это в compose-файл и запустите. Держите порт 7007 в частной сети."
+    custom-cert: "Этот Dozzle использует собственный сертификат, поэтому агенту нужна та же пара, иначе он отклонит подключение."
+    cert-docs: "Руководство по сертификатам"
+    connect-title: "Подключитесь"
+    address: "Адрес"
+    name: "Имя"
+    optional: "(необязательно)"
+    add: "Добавить хост"
+    connect-note: "Dozzle подключается до сохранения. Хост появляется сразу, без перезапуска."
+    added: "{name} подключён."
+    list-title: "Агенты"
+    connected: "Подключён"
+    offline: "Не подключён"
+    remove: "Удалить"
+    skip: "Не сейчас"
+    error-exists: "Этот агент уже добавлен."
+    error-duplicate: "Эта машина уже подключена как другой хост. Если агент работает на том же Docker engine, задайте ему собственный DOZZLE_HOST_ID."
+    error-connect: "Не удалось подключиться к агенту: {reason}"
+    error-cert: "У агента другой сертификат, чем у этого Dozzle. Скопируйте фрагмент заново, обновите агента и пересоздайте его."
+    error-cert-custom: "У агента нет собственного сертификата этого Dozzle. Передайте агенту те же файлы сертификата и ключа и пересоздайте его."
+    error-unsupported-mode: "В этом режиме здесь нельзя добавлять или удалять хосты."
+    error-invalid: "Этот адрес или имя недопустимы."
+    error-rate-limited: "Слишком много попыток. Подождите минуту и попробуйте снова."
+    error-env-agent: "Этот агент задан через DOZZLE_REMOTE_AGENT, поэтому удалить его можно только там."
+    error-not-found: "Этого агента больше нет в списке."
+    error-custom-cert: "Этот Dozzle уже использует собственный сертификат, поэтому создавать частный сертификат не нужно."
+    private-label: "Личный сертификат"
+    private-desc: "Подключиться к агенту сможет только этот Dozzle. Другие агенты не затрагиваются."
+    private-warning: "Этот фрагмент содержит закрытый ключ. Обращайтесь с ним как с паролем."
+    private-pill: "личный"
+    private-error: "Не удалось создать личный сертификат, поэтому используется общий. {reason}"
+    private-missing: "У этого Dozzle ещё нет личного сертификата. Снова включите «Личный сертификат» и повторите."
+  cloud:
+    title: Подключить Dozzle Cloud
+    subtitle: Узнавайте о сбоях, не держа вкладку открытой.
+    report-title: "Что нужно исправить, найдено за вас"
+    report-body: "Dozzle Cloud читает ваши ошибки и предупреждения и подсказывает, какие из них стоит исправить и как."
+    alerts-title: Оповещения в момент сбоя
+    alerts-body: "Падения, OOM и всплески ошибок, с отправкой в Telegram, Discord, Slack или на email."
+    chat-title: "Спросите с телефона, что сломалось"
+    chat-body: "Напишите боту в Telegram или Discord. Он читает ваши логи и, если действия включены, перезапускает контейнер после вашего подтверждения."
+    connect: Подключить Dozzle Cloud
+    first-week: "Ваша первая неделя включает отчёт каждое утро обо всех найденных проблемах и о том, как их исправить."
+    learn-more: Подробнее
+    skip: "Не сейчас"
+  update:
+    pill-on: "Использует действия · вкл"
+    pill-pending: "Включится вместе с действиями"
+    title: "Держите контейнеры в актуальном состоянии"
+    subtitle: "В тихий час Dozzle ищет новые образы и обновляет себя и выбранные вами контейнеры. Настройки, пользователи и оповещения сохраняются."
+    auto-label: "Обновлять автоматически"
+    auto-desc: "Проверяет наличие более новых образов и обновляет Dozzle и контейнеры ниже, если они есть."
+    when-label: "Когда"
+    time-label: "Время"
+    server-time: "Используется часовой пояс сервера."
+    daily: "Ежедневно"
+    weekly: "Еженедельно по воскресеньям"
+    version-label: "Версия"
+    update-now: "Обновить сейчас"
+    pulling: "Загрузка нового образа"
+    up-to-date: "Dozzle уже обновлён."
+    restarting: "Dozzle заменяет себя новой версией."
+    restarting-hint: "Страница перезагрузится, как только новая версия ответит."
+    needs-actions: "Кнопка «Обновить сейчас» заработает, когда действия будут включены, после перезапуска."
+    reason-pinned-tag: "Вы используете закреплённый тег версии, поэтому загружать нечего. Используйте тег вроде latest, чтобы получать обновления."
+    reason-unsupported: "Здесь Dozzle не может найти собственный контейнер, поэтому не может заменить себя."
+    reason-swarm-worker: "Dozzle работает как сервис Swarm на рабочем узле. Обновить сервис может только менеджер, поэтому запустите Dozzle на менеджере или обновите его командой docker service update."
+    pull-denied: "Не удалось загрузить {image}. Возможно, образ есть только на этой машине или реестру нужен docker login."
+    cloud-hint: "С Dozzle Cloud каждое обновление сверяется с ошибками до него, и вам предложат откат, если их стало больше."
+  restart:
+    title: Перезапустить Dozzle
+    subtitle: Изменения сохранены и начнут работать после перезапуска.
+    change-auth: Вход
+    "on": "Вкл."
+    "off": "Выкл."
+    button: Перезапустить Dozzle
+    restarting: Перезапуск Dozzle
+    restarting-hint: Страница перезагрузится, как только Dozzle вернётся.
+    slow-title: Это занимает больше времени
+    slow-body: Dozzle ещё не вернулся. Проверьте контейнер, затем перезагрузите страницу.
+    reload: Перезагрузить
+    manual: Dozzle не может перезапустить себя здесь. Перезапустите контейнер или задайте это в compose-файле.
+    done-title: Всё готово
+    done-body: Перезапуск не нужен. Вернуться к этому можно в любой момент из настроек.
+    nothing-title: "Перезапускать нечего"
+    nothing-body: "В этот раз ни один шаг не настроен. Откройте настройку в разделе «Настройки», когда будете готовы."
+    cloud-later: "Dozzle Cloud ждёт вас в разделе «Настройки», когда понадобится. Бесплатно для одного сервера."
+    done: Готово
+  error:
+    generic: Что-то пошло не так. Попробуйте снова.
+    load: Не удалось загрузить настройку. Попробуйте позже.
+    conflict: Это уже задано или зафиксировано переменной окружения.
+    no-data: /data не смонтирован, поэтому сохранить это нельзя.
+    window-closed: "Без входа настройка принимает изменения только в первые 15 минут новой установки. Включите вход через переменные окружения."
+mcp-authorize:
+  title: "Авторизация MCP-клиента"
+  subtitle: "{client} хочет использовать Dozzle от вашего имени."
+  unnamed-client: "Клиент без имени"
+  redirect-label: "Вернёт вас на"
+  access-label: "Доступ"
+  access-value: "Чтение контейнеров, логов и статистики"
+  user-label: "Вы вошли как"
+  hint: "Разрешайте доступ только клиенту, который вы только что подключили сами, и проверьте, что адрес выше — ожидаемый."
+  allow: "Разрешить"
+  deny: "Отклонить"
+  return: "Вернуться в клиент"
+  redirecting: "Возвращаемся в клиент. Когда всё завершится, эту вкладку можно закрыть."
+  failed: "Не удалось выполнить запрос."
+mobile-nav:
+  label: "Главное меню"
+  home: "Главная"
+  browse: "Обзор"
+  back: "Назад"
+time-range:
+  title: "Временной диапазон"
+  live: "В реальном времени"
+  last-15m: "Последние 15 минут"
+  last-1h: "Последний час"
+  last-6h: "Последние 6 часов"
+  last-24h: "Последние 24 часа"
+  custom: "Свой диапазон"
+  from: "С"
+  to: "По"
+  keep-following: "Продолжать следить"
+  volume: "Объём логов"
+  errors: "Ошибки"
+  bucket: "Строк: {lines} · ошибок: {errors}"
+  not-scanned: "не прочитано"
+  invalid: "Конец должен быть позже начала."
+  show: "Показать логи"
+  edge-start: "С"
+  edge-end: "До"
+  show-earlier: "показать раньше"
+  show-later: "показать позже"
+  to-now: "до сейчас"
+  shift-earlier: "Предыдущее окно"
+  shift-later: "Следующее окно"
+  last-short: "Последние {span}"
+  since-short: "С {time}"
+  custom-hint: "Выберите дни, затем время. Время в {zone}."
+  keep-following-hint: "Оставить конец открытым и показывать новые строки."
+  previous-month: "Предыдущий месяц"
+  next-month: "Следующий месяц"
+  empty-range: "В этом диапазоне нет логов"
+  empty-range-hint: "С {from} по {to} ничего не записано."
+  empty-since: "Нет логов с {time}"
+  empty-since-hint: "Новые строки появятся здесь сразу после записи."
+  jump-before: "Более ранние строки · {time}"
+  jump-after: "Более поздние строки · {time}"
+  empty-window: "В этом окне нет логов"
+update-marker:
+  updated: "Обновлено"
+  rolled-back: "Откачено"
+  undone: "Обновление отменено"
+  roll-back: "Откатить"
+  by:
+    schedule: "по расписанию автообновления"
+    dozzle: "из Dozzle"
+    cloud: "из Dozzle Cloud"
+  verdict:
+    pending: "Dozzle Cloud следит за этим обновлением"
+    clean: "Выглядит нормально"
+    regressed: "Похоже, сломано"
+    unsure: "Возможна проблема"
+    rolled_back_by_dozzle: "Dozzle вернул предыдущий контейнер"
+  decision:
+    rolled_back: "Откачено"
+    kept: "Оставлено"
+auto-update:
+  which-label: "Какие контейнеры"
+  mode-off: "Только Dozzle"
+  mode-off-desc: "Остальные контейнеры проверяются и ждут, пока вы их обновите."
+  mode-all: "Все"
+  risky: "{count} контейнер хранит данные в именованном томе. База данных может перейти на версию, которая не прочитает её данные. | Контейнеров с данными в именованных томах: {count}. База данных может перейти на версию, которая не прочитает её данные."
+  containers-still: "Остальные контейнеры по-прежнему обновляются по этому расписанию."
+  needs-actions: "Пока действия с контейнерами выключены, ничего не обновляется само."
+  containers: "Контейнеры"
+  status-current: "Актуален"
+  status-available: "Есть обновление"
+  status-pending: "Ещё не проверен"
+  status-off: "Не проверяется"
+  status-pinned: "Закреплён на дайджесте"
+  status-local: "Собран локально"
+  status-private: "Приватный реестр"
+  status-unknown: "Не удаётся проверить"
+  safety-title: "Страховка"
+  safety-verify: "За каждым обновлением следят и откатывают его, если новый контейнер не работает."
+  safety-cleanup: "Старый образ потом удаляется. Один предыдущий образ остаётся для отката."
+  safety-skip: "Образы, закреплённые на дайджесте, собранные локально или из приватного реестра без учётных данных, пропускаются."
+  learn-more: "Как работает автообновление"
+  footnote: "{link} определяет, какие контейнеры обновляются сами."
+  footnote-link: "Настройки → Обновления"
+  mode-labelled: "Контейнеры с меткой"
+  mode-labelled-desc: "Плюс контейнеры с меткой {label}."
+  mode-all-desc: "Все контейнеры, кроме помеченных {label}."
+  risky-hint: "Добавьте контейнеру метку {label}, чтобы исключить его."
+  empty: "Ни один контейнер не обновляется сам. Добавьте контейнеру метку {label}, чтобы включить его."
+inspect:
+  overview: "Обзор"
+  ports: "Порты"
+  mounts: "Монтирования"
+  env: "Окружение"
+  labels: "Метки"
+  id: "ID"
+  command: "Команда"
+  created: "Создан"
+  started: "Запущен"
+  finished: "Завершён"
+  restart-policy: "Политика перезапуска"
+  network: "Сеть"
+  memory-limit: "Лимит памяти"
+  cpu-limit: "Лимит CPU"
+  unlimited: "Без ограничений"
+  oom-killed: "Убит по OOM"
+  exit-code: "Код выхода {code}"
+  restarts: "Перезапуски: {count}"
+  show-value: "Показать значение"
+  hide-value: "Скрыть значение"
+  env-hidden: "Значения скрыты. Для их чтения нужен доступ к shell."
+  load-failed: "Не удалось загрузить сведения о контейнере."
+  networks: "Сети"
+  container-count: "1 контейнер | Контейнеров: {count}"
+  subnet: "Подсеть"
+  gateway: "Шлюз"
+  ip-usage: "Используемые IP"
+  connected-containers: "Подключённые контейнеры"
+  this-container: "этот контейнер"
+  driver: "Драйвер"
+  scope: "Область"
+  driver-options: "Параметры драйвера"
+  mounted-by: "Смонтирован в"
+  details-failed: "Не удалось загрузить сведения."
+  size: "Размер"
+  mountpoint: "Точка монтирования"
+reclaim:
+  clean-up: "Очистить"
+  free-up: "Освободить {size}"
+  confirm-title: "Освободить {size} на {host}?"
+  cannot-undo: "Это действие нельзя отменить."
+  images-repull: "Остановленный стек заново скачает свои образы при следующем запуске."
+  volumes-warning: "Тома (1) хранят данные, которые сейчас не использует ни один контейнер. Удаление сотрёт эти данные, например базу данных, контейнер которой был удалён. | Тома ({count}) хранят данные, которые сейчас не использует ни один контейнер. Удаление сотрёт эти данные, например базу данных, контейнер которой был удалён."
+  volumes-confirm: "Понимаю, удалить тома"
+  delete: "Удалить"
+  deleting: "Освобождение {size}…"
+  freed: "Освобождено {size}"
+  failed: "Не удалось очистить"
+  agent-too-old: "Этот агент пока не умеет очищать. Обновите его до последней версии."
+  preview-note: "Очистка проверяет всё заново при запуске, так что всё, что перестанет использоваться до этого момента, тоже будет удалено."
+  preview-failed: "Не удалось получить список."
+  preview-agent-too-old: "Обновите этот агент, чтобы увидеть список."
+  enable-actions: "Включите действия с контейнерами, чтобы очищать отсюда."
+  schedule-label: "Очищать автоматически"
+  scheduled-run: "Плановая очистка"
+  schedule-desc: "Неиспользуемые образы, остановленные контейнеры и кэш сборки на всех хостах. Тома никогда не удаляются."
+  last-run: "Последний запуск освободил {size} {when}."
+  last-run-failed: "Не удалось очистить {count} хост, смотрите логи. | Не удалось очистить {count} хоста, смотрите логи."

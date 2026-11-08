@@ -5,39 +5,101 @@ toolbar:
   search: Zoeken
   inverse-on: Overeenkomsten uitsluiten (omgekeerd)
   inverse-off: Overeenkomsten opnemen (normaal)
+  invalid-regex: Ongeldige reguliere expressie
+  close-search: Zoeken sluiten
+  move-search: Sleep om te verplaatsen
+  search-all-containers: Zoeken in alle containers
   show: Toon {std}
   show-all: Toon alles
   stop: Stoppen
   start: Starten
   restart: Herstarten
+  rollout-restart: "{kind} herstarten"
+  rollout-restart-done: "{workload} rolt nieuwe pods uit."
+  section-containers: "Containers"
+  restart-all: "Alles herstarten"
+  stop-all: "Alles stoppen"
+  start-all: "Alles starten"
+  bulk-confirm-restart: "1 container herstarten? | {count} containers herstarten?"
+  bulk-confirm-stop: "1 container stoppen? | {count} containers stoppen?"
+  bulk-confirm-start: "1 container starten? | {count} containers starten?"
+  bulk-self-skipped: "De eigen container van Dozzle wordt overgeslagen."
+  bulk-more: "en nog {count}"
+  bulk-failed: "Niet gelukt voor {names}"
   update: Bijwerken
   update-service: Service Bijwerken
   update-pulling: Laatste image ophalen...
   update-recreating: Container opnieuw aanmaken...
+  update-verifying: Controleren of de nieuwe container blijft draaien...
+  update-rolled-back: De nieuwe container bleef niet draaien, dus de vorige is hersteld.
   update-done: Container succesvol bijgewerkt
   update-up-to-date: Al bijgewerkt
-  update-available: 'Update beschikbaar'
-  check-for-updates: 'Controleren op updates'
-  checking-for-updates: 'Bezig met controleren op updates...'
-  no-updates: 'Geen updates'
-  dismiss-update: 'Deze update negeren'
-  view-release-notes: 'Release-opmerkingen bekijken'
+  update-available: "Update beschikbaar"
+  check-for-updates: "Controleren op updates"
+  checking-for-updates: "Bezig met controleren op updates..."
+  no-updates: "Geen updates"
+  dismiss-update: "Deze update negeren"
+  view-release-notes: "Release-opmerkingen bekijken"
   show-hostname: Toon hostnaam
   show-container-name: Toon containernaam
   shell: Shell
   attach: Koppelen
+  inspect: "Inspecteren"
   copy-permalink: Permanente link kopiëren
   copy-image: "Image-tag kopiëren"
+  image-version: "{image} is momenteel {version}"
+  pin: "Vastzetten"
+  unpin: "Losmaken"
   copy-logs: Logs kopiëren
   copy-filtered-logs: Gefilterde logs kopiëren
   copying-logs: Logs kopiëren...
+  streams: Streams
+  levels: Niveaus
+  toggle-all-levels: Alle niveaus omschakelen
+  all: Alle
+  none: Geen
+  section-logs: Logs
+  section-filters: Filters
+  section-display: Weergave
+  section-export: Exporteren
+  section-container: Container
+  section-image: Image
+  section-workload: "Workload"
 action:
   copy-log: Log kopiëren
   copy-link: Permalink kopiëren
   see-in-context: Bekijk in context
+  search-similar: Zoek vergelijkbare
   show-details: Toon details
   create-alert: Waarschuwing aanmaken
+  ask-about-log: Vraag over deze log
+log-details:
+  on-std: op {std}
+  image: Image
+  raw-json: Ruwe JSON
+  copy: Kopiëren
+  download: JSON downloaden
+  fields: Velden
+  field: Veld
+  value: Waarde
+  fields-hint: Sleep om te herordenen. Schakel in of uit om ze in de logstroom te tonen of te verbergen.
+  chart-field: "{field} als grafiek tonen in SQL-analyse"
+  toggle-all: Alle velden omschakelen
+  toggle-field: Tonen of verbergen in de logstroom
+  memory-title: "Nieuw voor deze container"
+  memory-explain: "Dozzle Cloud heeft dit patroon nog niet eerder op deze container gezien. Regels die alleen verschillen in getallen, ID's of adressen tellen als één patroon."
+  memory-pattern: "Patroon"
+  memory-first-seen: "Eerst gezien"
+  memory-first-seen-now: "Met deze regel"
+  memory-last-hour: "Afgelopen uur"
+  memory-lines: "Geen regels | 1 regel | {count} regels"
 label:
+  hide-sidebar: "Zijbalk verbergen"
+  show-sidebar: "Zijbalk tonen"
+  host-unreachable: "onbereikbaar"
+  agent-unreachable: "Kan agent op {endpoint} niet bereiken"
+  agent-outdated: "agent {version}"
+  historical-at: "Historische logs · {time}"
   containers: Containers
   container: Geen containers | 1 container | {count} containers
   alert-events: Geen gebeurtenissen | 1 gebeurtenis | {count} gebeurtenissen
@@ -50,6 +112,7 @@ label:
   event-suppressed-hint: Dozzle Cloud herkende deze regel maar hield de melding tegen
   event-metric: Metriek
   event-container: Container
+  memory-new: "Nieuw"
   host-count: Geen Hosts | 1 Host | {count} Hosts
   service: Geen services | 1 service | {count} services
   services: Services
@@ -57,20 +120,35 @@ label:
   all-containers: Alle containers
   all-namespaces: Alle Namespaces
   namespaces: Namespaces
+  owners: Eigenaren
   host: Host
   hosts: Hosts
   password: Wachtwoord
   username: Gebruikersnaam
+  or: of
   container-name: Containernaam
   status: Status
   created: Aangemaakt
-  avg-cpu: Gem. CPU (%)
-  avg-mem: Gem. geheugen (%)
+  avg-cpu: Gem. CPU
+  avg-mem: Gem. geheugen
   name: Naam
   cpu: CPU
+  core: Geen kernen | 1 kern | {count} kernen
+  disk: Schijf
+  disk-io: Schijf-I/O
+  network: Netwerk
+  reclaimable: Vrij te maken
+  unused-images: "Ongebruikte images"
+  unused-volumes: "Ongebruikte volumes"
+  stopped-containers: "Gestopte containers"
+  build-cache: "Buildcache"
+  load: Belasting
+  uptime: Uptime
   mem: MEM
   pinned: Vastgezet
   per-page: Rijen per pagina
+  columns: Kolommen
+  moving-average: Voortschrijdend gemiddelde gebruiken
   sort-by: Sorteren op
   sort-direction: Sorteervolgorde omkeren
   host-menu: Hosts en Containers
@@ -78,40 +156,78 @@ label:
   k8s-menu: Kubernetes
   group-menu: Aangepaste groepen
   no-logs: Container heeft nog geen logbestanden
+  no-logs-hint: "Alles wat de container schrijft, verschijnt hier direct."
   search-status:
     searching: Oudere logs doorzoeken…
-    searching-to: Oudere logs doorzoeken… terug tot {time}
-    capped: "{count} overeenkomsten · doorzocht tot {time}"
-    exhausted: Alle logs doorzocht · {count} overeenkomsten
-    empty: Geen overeenkomsten · alle logs doorzocht
+    matches: "{count} overeenkomsten"
+    searched-all: "Alle logs doorzocht"
+    scanned-to: "terug tot {time}"
+    empty: "Geen overeenkomende logs"
+    empty-hint: "Alle logs doorzocht. Probeer een andere zoekterm of wis de zoekopdracht."
   show-all-containers: Toon alle containers
   collapse-all: Alles inklappen
   collapse-group: Groep inklappen
   expand-all: Alles uitklappen
+  more-options: Meer opties
+  groups: Groepen
 tooltip:
+  memory-new: "Dozzle Cloud heeft deze fout nog niet eerder op deze container gezien. Klik om hem in context te zien."
+  memory-new-since: "Voor het eerst gezien op deze container: {time}. Klik om te zien waar hij begon."
+  live-logs: Deze logs zijn bevroren op dit tijdstip. Klik om de live stream te volgen.
   search: Zoek containers (⌘ + k, ⌃k)
   pin-column: Vastzetten als kolom
+  unpin-column: Kolom losmaken
+  merge-stream: Samenvoegen met stream
+  merge-stream-hint: Open een container om mee samen te voegen
+  unmerge-stream: Verwijderen uit stream
   merge-all: Voeg alles samen in één stream
   network-io: "Netwerk: ↑ {tx}/s · ↓ {rx}/s"
   disk-io: "Schijf: ↑ {write}/s · ↓ {read}/s"
   cpu-usage: "CPU {cpu}% / {cores} kernen"
   memory-usage: "Geheugen {used} / {total}"
+  disk-layer: "Beschrijfbare laag: {size}"
+  disk-volume-shared: "{name}: {size} (gedeeld door {count} containers)"
+  reclaimable-source: "Hetzelfde totaal als {command} meldt."
   volumes: Volumes
   volume-unreachable: niet bereikbaar vanaf deze host
   volume-full: "{destination} is {pct} vol"
+  open-container-url: "{url} openen"
+  agent-version: "Dozzle-agent {version}"
+  agent-version-mismatch: "Agent {version} en Dozzle {current} hebben verschillende versies. Gebruik op beide dezelfde versie."
+popup:
+  group: Groep
+  ports: Poorten
+container-status:
+  up: "{duration} actief"
+  paused: "Gepauzeerd, {duration} actief"
+  restarting: "Herstarten, gestopt {time}"
+  exited: "Afgesloten {time}"
+hint:
+  learn-more: Meer informatie
+  dismiss: Niet meer tonen
+link-hint:
+  title: Deze container koppelen
+  description: Dozzle toont een link naar de webinterface van een container zodra je een dev.dozzle.url-label toevoegt. Voeg dit toe aan je compose-bestand en herstart de container.
+  copy: Kopiëren
 error:
   page-not-found: Deze pagina bestaat niet
   host-group-not-found: 'Geen hosts gevonden in groep "{name}"'
   invalid-auth: Gebruikersnaam of wachtwoord is ongeldig
+  oauth-failed: Aanmelden mislukt. Probeer het opnieuw.
   copy-not-supported: Kopiëren naar klembord wordt niet ondersteund in je browser
-  copy-not-supported-hint: Klembord niet beschikbaar. Kopieer de link hieronder
+  copy-insecure: Klembord geblokkeerd op http
+  copy-insecure-hint: Je browser staat klembordtoegang alleen toe via https. Kopieer de tekst handmatig.
   logs-skipped: Toon {total} verborgen items
   container-not-found: Container niet gevonden
+  container-not-found-hint: Mogelijk is hij verwijderd, of is de host niet meer bereikbaar.
+  nothing-running: "Hier draait niets"
+  nothing-running-hint: "Geen van de containers in deze weergave draait. Logs verschijnen hier zodra er een start."
   action-failed: Actie Mislukt
   update-failed: Update Mislukt
   unable-to-complete-action: Kan actie niet voltooien
   invalid-action: Ongeldige actie
   unable-to-update: Kan container niet bijwerken
+  start-container-first: Start eerst de container
   something-went-wrong: Er is iets misgegaan
   unknown-error: Onbekende fout
   events-stream:
@@ -125,10 +241,9 @@ error:
       De verbinding met de API is verlopen. Controleer je netwerkverbinding en probeer het opnieuw.
 alert:
   image-update:
-    title: 'Update beschikbaar'
-    message: 'Er is een nieuwere image gepubliceerd voor {image}.'
+    title: "Update beschikbaar"
+    message: "Er is een nieuwere image gepubliceerd voor {image}."
     enable-actions: '<a href="https://dozzle.dev/guide/actions" target="_blank" rel="noreferrer noopener">Schakel acties in</a> om deze hier op te halen en opnieuw aan te maken.'
-    self: 'Dozzle kan zichzelf niet bijwerken, start het opnieuw om de update toe te passen.'
   redirected:
     title: Doorgestuurd naar nieuwe container
     message: Dozzle heeft je automatisch doorgestuurd naar de nieuwe container {containerId}.
@@ -147,8 +262,11 @@ title:
   settings: Instellingen
   notifications: Meldingen
 button:
+  back-to-dashboard: Terug naar dashboard
+  live-logs: Naar live logs
   logout: Afmelden
   login: Aanmelden
+  login-with: Doorgaan met {provider}
   settings: Instellingen
   cancel: Annuleren
   redirect: Doorsturen
@@ -156,52 +274,64 @@ button:
   refresh: Vernieuwen
 placeholder:
   search-containers: Zoek containers (⌘ + k, ⌃k)
+  find-logs: Zoek in logs of regex
   search: Zoeken
 settings:
-  show-image-update-alert: 'Toon een melding wanneer een container een update heeft'
-  show-image-update-alert-desc: 'Controleert de registry op een nieuwere tag van de draaiende image.'
-  help-support: >
-    Steun Dozzle door te doneren of door ons te sponsoren op GitHub. Jouw bijdrage helpt ons om Dozzle verder te verbeteren voor iedereen. Hartelijk dank! 🙏🏼
-  about-desc: Informatie over jouw Dozzle-installatie en hoe je het project kunt ondersteunen.
-  display-desc: Pas aan hoe logs en de rest van de app eruitzien. De voorbeeldweergave toont je wijzigingen live.
-  options-desc: Voorkeuren voor taal, navigatie en groepering.
-  cloud-desc: Stream logs naar Dozzle Cloud voor AI-gestuurde analyses en zoeken over instanties heen.
-  support-title: Steun Dozzle
-  support-help: Donaties houden Dozzle gratis en onderhouden. Bedankt 🙏
-  display: Weergave
-  locale: Taal aanpassen
-  locale-desc: 'Volgt standaard de taal van je browser.'
-  small-scrollbars: Kleinere scrollbalk gebruiken
-  small-scrollbars-desc: 'Dunnere schuifbalken, handig op kleinere schermen.'
-  show-timestamps: Tijdstempel tonen
-  show-timestamps-desc: 'Zet voor elke regel het tijdstip waarop die geschreven is.'
-  soft-wrap: Regels zacht afbreken
-  soft-wrap-desc: 'Breek lange regels af in plaats van zijwaarts te scrollen.'
-  datetime-format: Datum- en tijdnotatie aanpassen
-  datetime-format-desc: 'Volgt standaard de taal en klok van je browser.'
-  font-size: Lettergrootte voor logs
-  font-size-desc: 'Geldt alleen voor de loguitvoer, niet voor de rest van de app.'
-  color-scheme: Kleurmodus
-  color-scheme-desc: 'Auto volgt je systeeminstelling.'
-  options: Opties
-  show-stopped-containers: Gestopte containers tonen
-  show-stopped-containers-desc: 'Toon gestopte containers in de zijbalk en in lijsten.'
-  group-containers: Groepeer containers op namespace
-  group-containers-desc: 'Groepeert op Compose-project, Swarm-stack of dev.dozzle.group.'
-  show-app-icons: 'App-pictogrammen tonen'
-  show-app-icons-desc: 'Koppel bekende images aan hun logo. De pictogrammen zitten in Dozzle en worden nooit van internet opgehaald.'
+  subtitle: Voorkeuren voor deze browser. Wijzigingen worden automatisch opgeslagen.
+  subtitle-server: "Instellingen voor deze Dozzle, gedeeld door iedereen die hem gebruikt."
+  appearance: Weergave
+  logs: Logs
+  sidebar: Zijbalk
+  behavior: Gedrag
+  advanced: Geavanceerd
   about: Over
-  search: Doorzoeken inschakelen via Dozzle
-  search-desc: 'Zoek in de logs van de container die je bekijkt.'
-  using-version: Je gebruikt <a href="https://dozzle.dev/" target="_blank" rel="noreferrer noopener">Dozzle</a> {version}.
-  update-available: >-
-    Er is een nieuwe versie beschikbaar! Update naar <a href="{href}" target="_blank" rel="noreferrer noopener">{nextVersion}</a>.
+  general: Algemeen
+  updates: Updates
+  security: "Beveiliging"
+  hosts: "Hosts"
+  login-desc: "Wie Dozzle kan openen. Zonder login kan iedereen die het bereikt je logs lezen."
+  login-off: "Geen login"
+  login-docs: "Handleiding authenticatie"
+  set-by-flags: "In deze modus ingesteld met flags of omgevingsvariabelen."
+  hosts-found: "In deze modus vindt Dozzle deze hosts zelf."
+  after-restart: "Na herstart"
+  restart-pending: "1 wijziging geldt na een herstart | {count} wijzigingen gelden na een herstart"
+  run-setup: "Installatie opnieuw doorlopen"
+  run-setup-desc: "Een begeleide ronde langs login, acties, hosts, Dozzle Cloud en updates. Alles daarin staat ook in Instellingen."
+  reset: Standaardwaarden herstellen
+  sponsor: Sponsoren
+  new-version: "{version} beschikbaar"
+  update-available: "Er is een nieuwere image beschikbaar"
+  auto-update-on: "Dozzle houdt zichzelf up-to-date"
+  show-image-update-alert: "Image-updatemeldingen"
+  show-image-update-alert-desc: "Melden wanneer er een nieuwere tag van een draaiende image bestaat."
+  cloud-desc: Stream logs naar Dozzle Cloud voor AI-gestuurde analyses en zoeken over instanties heen.
+  locale: Taal
+  small-scrollbars: Smalle scrollbalken
+  small-scrollbars-desc: "Dunnere schuifbalken, handig op kleinere schermen."
+  show-timestamps: Tijdstempel tonen
+  show-timestamps-desc: "Toon wanneer elke regel is geschreven."
+  soft-wrap: Regelafbreking
+  soft-wrap-desc: "Lange regels afbreken in plaats van zijwaarts te scrollen."
+  highlight-errors: Foutregels markeren
+  highlight-errors-desc: "De gekleurde niveaumarkering wordt altijd getoond."
+  date-format: "Datumnotatie"
+  time-format: "Tijdnotatie"
+  font-size: Lettergrootte
+  color-scheme: Thema
+  show-stopped-containers: Gestopte containers tonen
+  group-containers: Containers groeperen
+  group-containers-desc: "Op Compose-project, Swarm-stack of dev.dozzle.group."
+  show-app-icons: "App-pictogrammen"
+  show-app-icons-desc: "Meegeleverd met Dozzle, nooit van internet opgehaald."
+  search: Logs doorzoeken met
+  search-desc: "Vervangt het zoeken van de browser tijdens het bekijken van een container."
   show-std: Toon stdout- en stderr-labels
-  show-std-desc: 'Geef aan of een regel van stdout of stderr komt.'
-  automatic-redirect: Automatisch omleiden naar nieuwe containers met dezelfde naam
-  automatic-redirect-desc: 'Als een container wordt vervangen, ga mee naar de nieuwe.'
-  compact: Compacte modus inschakelen voor logs
-  compact-desc: 'Verklein de ruimte tussen logregels zodat er meer op het scherm past.'
+  show-std-desc: "Geef aan of een regel van stdout of stderr komt."
+  automatic-redirect: Opnieuw gemaakte containers volgen
+  automatic-redirect-desc: "Wanneer een container wordt vervangen, spring naar de nieuwe."
+  compact: Compacte modus
+  compact-desc: "Kleinere tussenruimte zodat er meer regels op het scherm passen."
   size:
     small: Klein
     medium: Middel
@@ -216,12 +346,12 @@ settings:
     none: Geen
   grouping:
     always: Altijd
-    at-least-2: Minimaal 2
+    at-least-2: "Groepen van 2 of meer"
     never: Nooit
   hour:
     auto: Auto
-    12: "12"
-    24: "24"
+    "12": "12-uurs"
+    "24": "24-uurs"
   log:
     preview: Voorbeeld van de logweergave
     warning: Een waarschuwingslog ziet er zo uit
@@ -236,19 +366,21 @@ releases:
   bugFixes: één bugfix | {count} bugfixes
   breaking: één breaking change | {count} breaking changes
   three_parts: "{first}, {second} en {third}"
-  two_parts: "{first} met {second}"
+  two_parts: "{first} en {second}"
   latest: Meest recent
   no_releases: Je gebruikt de nieuwste versie
-log_actions:
-  copy_log: Log kopiëren
-  jump_to_context: Ga naar context
+  newer: "1 nieuwere versie | {count} nieuwere versies"
+  all: Alle versies
+  updates_summary: "1 container bijgewerkt | {count} containers bijgewerkt"
+  agents_mismatched: "1 agent met een andere versie | {count} agents met een andere versie"
 toasts:
   copied:
     title: Gekopieerd
     message: Log gekopieerd naar klembord
 analytics:
   creating_table: Tijdelijke tabel wordt aangemaakt...
-  downloading: Containerlogs worden opgehaald... ({size})
+  fetching_logs: Containerlogs worden opgehaald
+  loading_engine: SQL-engine wordt geladen
   evaluating_query: Query wordt geëvalueerd...
   total_records: In totaal {count} resultaten.
   showing_first: Eerste {count} worden weergegeven.
@@ -259,19 +391,98 @@ analytics:
   example_all: Alle logs
   example_count: Aantal rijen
   example_group: Aantal per {column}
+  example_by_container: Per container
+  include_previous: "1 oudere container meenemen | {count} oudere containers meenemen"
+  containers_count: "{count} containers"
   export: Exporteren
   export_csv: CSV downloaden
   export_json: JSON downloaden
+  query: Query
+  run: Uitvoeren
+  results: Resultaten
+  min: Min
+  avg: Gem
+  max: Max
+  p50: P50
+  p95: P95
+  distribution_of: "Verdeling van {column}"
+  rows: 1 rij | {count} rijen
+updates:
+  title: Updates
+  count: 1 update | {count} updates
+  available: 1 update beschikbaar | {count} updates beschikbaar
+  running: Bijwerken…
+  subtitle: Deze containers draaien een ouder image dan hun registry aanbiedt.
+  subtitle-running: Elke host werkt één container tegelijk bij.
+  none: Alle containers draaien het nieuwste image van hun tag.
+  update-selected: Bijwerken | 1 bijwerken | {count} bijwerken
+  self-last: Dozzle wordt als laatste bijgewerkt en herstart daarna.
+  read-only: Om hier bij te werken zijn containeracties en de update-rol nodig.
+  auto: Auto
+  auto-hint: Wordt ook bijgewerkt volgens het schema voor automatische updates
+  auto-footnote: Geef een container het label {label} om hem volgens het schema voor automatische updates bij te werken.
+  check-only: Heeft het label {label}, dus wordt buiten Dozzle bijgewerkt.
+  scheduled-running: Het schema voor automatische updates draait nu.
+  progress: "{done} van {total} klaar"
+  back: Terug
+  busy: Er loopt al een andere update.
+  summary: "{updated} bijgewerkt"
+  summary-failed: "{updated} bijgewerkt, {failed} mislukt"
+  status:
+    queued: Wachtrij
+    pulling: Ophalen
+    recreating: Opnieuw maken
+    verifying: Controleren
+    done: Bijgewerkt
+    rolled-back: Teruggedraaid
+    up-to-date: Actueel
+    error: Mislukt
+  release-notes: Releasenotes
+  version:
+    rebuilt: opnieuw gebouwd
+    unknown: Versie onbekend ({reason})
+    undeclared: image vermeldt geen versie
+    rate-limited: registry-limiet bereikt
+    auth: registry vereist inloggen
+    failed: opzoeken mislukt
 drawer:
   maximize: Maximaliseren
   restore: Herstellen
+terminal:
+  connecting: Verbinden
+  connected: Verbonden
+  closed: Verbroken
+  connection-closed: Verbinding gesloten
+  not-running: Container draait niet
+  reconnect: Opnieuw verbinden
+  attaching: Verbinden met {name}
+  decrease-font: Lettergrootte verkleinen
+  increase-font: Lettergrootte vergroten
+  search: Zoeken
+  no-results: Geen resultaten
+  previous-match: Vorige overeenkomst
+  next-match: Volgende overeenkomst
+  close-search: Zoeken sluiten
 notifications:
+  history:
+    title: Activiteit
+    loading: Activiteit laden…
+    failed: Kon activiteit niet laden.
+    empty: Er is recent niets afgegaan.
+    still-happening: gebeurt nog steeds
+    events: "{n} gebeurtenissen"
+    suppressed: "· {n} onderdrukt"
+    show-lines: Laat me de regels zien
+    show-moment: Toon de logs eromheen
+    open-in-cloud: Openen in Dozzle Cloud
+    fired-recently: keer recent
   title: Meldingen
   description: Configureer waar en wanneer je waarschuwingen ontvangt
   destinations: Bestemmingen
   add-destination: Bestemming toevoegen
   alerts: Waarschuwingen
   add-alert: Waarschuwing toevoegen
+  new-alerts: Nieuwe waarschuwingen
   prefill-name: Foutwaarschuwingen
   prefill-expression: level == "error"
   add: Toevoegen
@@ -280,6 +491,7 @@ notifications:
     enabled: Ingeschakeld ({count})
     paused: Gepauzeerd ({count})
   no-alerts: Nog geen waarschuwingen geconfigureerd. Maak er een om te beginnen.
+  no-alerts-in-filter: Geen meldingen komen overeen met dit filter.
   default-alert-created: We hebben een standaardwaarschuwing voor je aangemaakt. Je krijgt bericht wanneer een container met een fout stopt. Je kunt deze altijd aanpassen of pauzeren.
   default-alert-failed: Je waarschuwing kon niet automatisch worden aangemaakt. Gebruik in plaats daarvan dit formulier.
   alert:
@@ -292,54 +504,122 @@ notifications:
     sample-window: Steekproefvenster
     destination: Bestemming
     dispatcher-deleted: Dispatcher verwijderd
-    containers-count: "{count} containers"
-    triggered-count: "{count} geactiveerd"
+    containers-count: "in 1 container | in {count} containers"
+    triggered-count: "Eén keer afgegaan | {count} keer afgegaan"
+    never-triggered: Nooit afgegaan
     last-triggered: "Laatst: {time}"
+    delete-warning: Deze melding verwijderen?
+    delete-cancel: Behouden
+    delete-confirm: Verwijderen
+    window-meta: "venster van {duration}"
+    cooldown-meta: "{duration} afkoeltijd"
   destination:
     http-webhook: HTTP Webhook
     dozzle-cloud: Dozzle Cloud
     edit: Bewerken
     duplicate: Dupliceren
     delete: Verwijderen
+    used-by: "Gebruikt door 1 melding | Gebruikt door {count} meldingen"
+    unused: Door geen enkele melding gebruikt
+    copy-of: "Kopie van {name}"
+    copy-failed: Deze bestemming kon niet worden gedupliceerd
+    delete-failed: Deze bestemming kon niet worden verwijderd
+    delete-warning: Deze bestemming verwijderen?
+    delete-warning-used: "1 melding stuurt hierheen en stopt met notificeren. | {count} meldingen sturen hierheen en stoppen met notificeren."
+    delete-cancel: Behouden
+    delete-confirm: Verwijderen
   alert-form:
     create-title: Waarschuwing aanmaken
     edit-title: Waarschuwing bewerken
-    description: Abonneer op loggebeurtenissen die voldoen aan je criteria
+    description-log: Krijg een melding wanneer overeenkomende regels in je containerlogs verschijnen
+    description-metric: Krijg een melding wanneer CPU, geheugen of schijfgebruik van een container een drempel overschrijdt
+    description-event: Krijg een melding wanneer containers starten, stoppen, crashen of van gezondheid veranderen
+    required: Verplicht
+    still-needed: "Nog nodig: {fields}"
+    missing:
+      container-expression: containers
+      condition: voorwaarde
+      destination: bestemming
+      name: naam
     alert-name: Waarschuwingsnaam
     alert-name-placeholder: bijv. Test API-fouten
-    container-filter: Containerfilter
-    containers-match: "{count} containers komen overeen: {names}"
-    no-containers-match: Geen containers komen overeen met dit filter
-    log-filter: Logfilter
-    logs-match: "{count} logs komen overeen"
-    no-logs-match: Geen logs komen overeen met dit filter
+    alert-name-hint: Wordt getoond op de meldingskaart en in elke notificatie die hij verstuurt.
+    container-filter: Containers
+    container-filter-hint: Welke containers deze melding bewaakt. Alleen draaiende containers tellen mee.
+    containers-match: "Komt overeen met 1 draaiende container: {names} | Komt overeen met {count} draaiende containers: {names}"
+    no-containers-match: Geen draaiende containers komen overeen met dit filter
+    checking: Bezig met controleren…
+    examples: "Voorbeelden:"
+    use-example: Dit voorbeeld gebruiken
+    seconds-unit: sec
+    log-filter: Logvoorwaarde
+    log-filter-hint: Welke logregels de melding activeren.
+    logs-match: "1 overeenkomende regel in de laatste {window} | {count} overeenkomende regels in de laatste {window}"
+    no-logs-match: Geen overeenkomende regels in de laatste {window}
+    log-preview-hint: Schrijf een voorwaarde om te zien welke recente logregels deze melding hadden geactiveerd.
+    log-scan-note: "Het voorbeeld doorzocht de eerste overeenkomende container. | Het voorbeeld doorzocht de eerste {count} overeenkomende containers."
+    preview-needs-containers: Kies eerst containers om een voorbeeld met echte data te zien.
+    preview-fix-expression: Corrigeer de expressie om een voorbeeld te zien.
     destination: Bestemming
-    select-destination: Selecteer een bestemming
-    no-destinations: Geen bestemmingen geconfigureerd. Voeg er eerst een toe.
+    no-destinations: Nog geen bestemmingen geconfigureerd.
     preview: Voorbeeld
     cancel: Annuleren
     save: Opslaan
     create: Waarschuwing aanmaken
-    metric-filter: Metriekexpressie
-    expression-valid: Expressie is geldig
-    metric-fields-hint: "Beschikbare velden: {fields}"
+    discard-title: Deze melding verwerpen?
+    discard-keep: Verder bewerken
+    discard-confirm: Verwerpen
+    metric-filter: Metriekvoorwaarde
+    metric-filter-hint: "Vergelijk cpu (%), memory (%), memoryUsage (bytes) of de vrije ruimte van mounts."
+    metric-preview-hint: Schrijf een voorwaarde om te zien hoe je containers er nu voor staan.
+    metric-preview-note: Gebaseerd op de laatste {duration} aan statistieken die Dozzle heeft verzameld.
+    metric-container: Container
+    metric-cpu: CPU
+    metric-memory: Geheugen
+    metric-window-match: Venster
+    metric-firing: Zou afgaan
+    metric-matching-now: Nu erboven
+    metric-no-samples: Geen data
+    metric-no-samples-hint: Nog geen statistieken verzameld voor de overeenkomende containers.
+    metric-would-fire: "Zou nu afgaan voor 1 container | Zou nu afgaan voor {count} containers"
+    metric-would-not-fire: Geen enkele container zit nu boven de drempel
     sample-window-label: Steekproefvenster
-    sample-window-hint: "Waarschuwing wordt geactiveerd wanneer de voorwaarde gedurende {duration} is voldaan"
+    sample-window-hint: "Gaat af zodra de voorwaarde {duration} standhoudt"
     cooldown-label: Wachttijd
     cooldown-hint: "{duration} tussen waarschuwingen per container"
     no-cooldown: Geen wachttijd
+    immediate-label: "Direct versturen"
+    immediate-hint: "Levert elke match meteen af zonder beoordeling door Dozzle Cloud, tot aan de dagelijkse meldingslimiet van je abonnement."
     alert-type: Waarschuwingstype
     log-alert: Logwaarschuwing
     metric-alert: Metrikwaarschuwing
     event-alert: Gebeurteniswaarschuwing
-    event-filter: Gebeurtenisexpressie
-    event-fields-hint: "Beschikbare velden: {fields}"
+    log-alert-description: Regels in containerlogs matchen
+    metric-alert-description: CPU-, geheugen- en schijfgebruik bewaken
+    event-alert-description: Reageren op starts, stops en gezondheidswijzigingen
+    type-switch-warning: Opslaan vervangt de {type}-voorwaarde van deze melding, die verloren gaat.
+    event-filter: Gebeurtenisvoorwaarde
+    event-filter-hint: Welke containergebeurtenissen de melding activeren.
+    event-matches: "Komt overeen met 1 van deze gebeurtenissen | Komt overeen met {count} van deze gebeurtenissen"
+    event-matches-none: Komt met geen van deze gebeurtenissen overeen
+    event-preview-hint: Schrijf een voorwaarde om te zien welke containergebeurtenissen hij zou opvangen.
+    event-preview-note: Voorbeeldgebeurtenissen, geen geschiedenis. Docker-gebeurtenissen worden live beoordeeld.
   destination-form:
     create-title: Bestemming toevoegen
     edit-title: Bestemming bewerken
     description: Waar moeten meldingen naartoe worden gestuurd?
     name: Naam
     name-placeholder: bijv. Productie Slack
+    name-hint: Zo staat deze bestemming in de lijst bij het kiezen voor een melding.
+    name-taken: Een andere bestemming gebruikt deze naam al.
+    still-needed: "Nog nodig: {fields}"
+    missing:
+      name: naam
+      url: webhook-URL
+      template: sjabloon
+    discard-title: Deze bestemming verwerpen?
+    discard-keep: Verder bewerken
+    discard-confirm: Verwerpen
     type: Type
     webhook-title: HTTP Webhook
     webhook-description: Slack, Discord, aangepast eindpunt
@@ -347,21 +627,37 @@ notifications:
     cloud-description: Pushmeldingen, e-mailwaarschuwingen en AI-samenvattingen
     webhook-url: Webhook URL
     webhook-url-placeholder: https://hooks.foo.com/services/...
+    webhook-url-invalid: Voer een volledige http:// of https:// URL in.
     api-key: API-sleutel
-    payload-format: Payload-formaat
+    payload-format: Payload
     format-slack: Slack
     format-discord: Discord
     format-ntfy: ntfy
     format-custom: Aangepast
+    format-replace-warning: Dit vervangt het sjabloon dat je hebt geschreven.
+    format-replace-confirm: Vervangen
     template: Sjabloon
     template-hint: Go-sjabloonsyntaxis
+    template-placeholder: JSON-body met Go-sjabloonvelden
+    payload-mode-json: Geldige JSON. Elke waarde wordt voor je gerenderd en geëscaped.
+    payload-mode-raw: Geen JSON, dus de hele body wordt als gerenderde tekst verstuurd.
+    payload-mode-unbalanced: Niet-afgesloten sjabloonactie.
+    payload-mode-empty: Een leeg sjabloon stuurt de volledige melding als JSON.
+    variables: Beschikbare variabelen
+    variables-all: Elke melding
+    variables-log: Alleen logmeldingen
+    variables-metric: Alleen metriekmeldingen
+    variables-event: Alleen gebeurtenismeldingen
+    variables-scope-hint: Velden buiten "Elke melding" bestaan alleen voor hun eigen type; elders gebruikt mislukt het bij verzenden.
     headers: Aangepaste Headers
     headers-hint: Optionele HTTP-headers (bijv. Authorization)
     header-name: Headernaam
     header-value: Headerwaarde
     add-header: Header toevoegen
+    remove-header: Header verwijderen
     test: Testen
     test-success: Test geslaagd
+    test-unsupported: "Deze sjabloon faalt voor {kinds}-meldingen, dus die worden hier niet verzonden."
     cancel: Annuleren
     close: Sluiten
     save: Opslaan
@@ -369,13 +665,10 @@ notifications:
     cloud-exists: Dozzle Cloud is al gekoppeld
     link-cloud: Account koppelen
     link-cloud-button: Dozzle Cloud koppelen
-    cloud-settings-hint: Om je beheerde kanalen te configureren, ga naar
     cloud-settings-link: Dozzle Cloud-instellingen
     cloud-checking: Cloudstatus controleren...
     cloud-relink: Uw API-sleutel is ongeldig of verlopen. Verwijder en koppel uw account opnieuw.
     cloud-unavailable: Dozzle Cloud is tijdelijk niet beschikbaar. Probeer het later opnieuw.
-    cloud-plan: Plan
-    cloud-usage: Gebeurtenissen deze periode
   empty-state:
     title: Aan de slag met meldingen
     description: Kies hoe je waarschuwingen wilt ontvangen wanneer je containers aandacht nodig hebben.
@@ -387,12 +680,20 @@ notifications:
 cloud:
   title: Dozzle Cloud
   description: Beheer je containers op afstand en gebruik AI om problemen in je cluster te onderzoeken.
+  pitch:
+    findings: Dagelijkse AI-scan van je fouten en waarschuwingen
+    alerts: Realtime meldingen bij crashes en drempelwaarden
+    control: Start, stop en inspecteer containers vanaf overal
   learn-more: Meer informatie
   link-instance: Instantie koppelen
   relink-instance: Instantie opnieuw koppelen
   connected: Verbonden
+  pro-badge: Dozzle Cloud Pro
+  locked-on-this-plan: Beschikbaar met Dozzle Cloud Pro
   plan: Plan
-  usage: Gebeurtenissen deze periode
+  usage: Gebeurtenissen
+  usage-agent-messages: Agentgesprekken
+  usage-log-bytes: Geïndexeerde data
   dashboard: Dashboard
   settings: Instellingen
   error: Verbindingsfout. Koppel je instantie opnieuw.
@@ -400,6 +701,7 @@ cloud:
   unlink: Ontkoppelen
   unlink-confirm: Weet je zeker dat je de koppeling met Dozzle Cloud wilt opheffen? Dit verwijdert alle cloudmeldingsbestemmingen.
   privacy:
+    details-link: "Wat wordt verstuurd"
     toggle: "Logs en metrieken streamen naar Dozzle Cloud"
     sends-heading: "Zolang dit aanstaat, sturen je containers continu:"
     sends-logs: "Logregels, zodra ze worden geschreven"
@@ -407,7 +709,7 @@ cloud:
     never-heading: "Wordt nooit verstuurd:"
     never-env: "Omgevingsvariabelen"
     off-note: "Schakel dit uit om logs en metrieken op deze instantie te houden. Ingestelde meldingen worden nog steeds bezorgd en toegang tot containers op afstand blijft werken."
-    per-container: "Sluit één container uit met het label: dev.dozzle.cloud.min_level=disabled"
+    per-container: "Stop de logs van één container met het label: dev.dozzle.cloud.min_level=disabled"
     required-for: "Vereist voor AI-onderzoek, zoeken in logs en resourcegeschiedenis."
   welcome:
     watching-title: "Cloud houdt je logs in de gaten zodat jij dat niet hoeft"
@@ -435,10 +737,12 @@ cloud:
     alerts-go-to: "Meldingen gaan naar"
     your-cloud-account: "je Cloud-account"
     change: "Wijzigen"
+    chat-also: "Krijg ze ook op je telefoon in Telegram of Discord."
+    chat-connect: "Verbinden"
     turn-on: "1 melding aanzetten | {count} meldingen aanzetten"
     turn-on-short: "Aanzetten"
     continue-without: "Doorgaan zonder meldingen"
-    skip-alerts: "Nu niet, stuur alleen de dagelijkse bevindingen"
+    skip-alerts: "Niet nu"
     ready: "Klaar"
     done-title: "Je bent klaar"
     done-body: "Hier verschijnt elk soort melding."
@@ -452,19 +756,101 @@ cloud:
     where-tuning: "Afstemmen per container"
     where-tuning-detail: "Beperk, demp of verwijder elke regel op de pagina Notificaties."
     done: "Klaar"
+    steps:
+      watching: "Wat Cloud doet"
+      alerts: "Realtime meldingen"
+      done: "Waar alles verschijnt"
     signals:
       exited: "Container met fout gestopt"
       unhealthy: "Container werd unhealthy"
       oom: "Gedood door de kernel (OOM)"
       restart: "Container herstart"
+      updated: "Container bijgewerkt door Dozzle"
       cpu: "CPU boven 90% gedurende 5 minuten"
       memory: "Geheugen boven 90% gedurende 5 minuten"
       disk: "Volume voor meer dan 85% vol"
       disk-free: "Volume met minder dan 1 GB vrij"
       fatal: "Elke fatal-regel"
       error: "Elke error-regel"
+cloud-rail:
+  title: Dozzle Cloud
+  chat: Vraag Dozzle
+  metrics: Metrieken
+  alerts: Waarschuwingen
+  close: Sluiten
+  hide: Cloudbalk verbergen
+  show: Cloudbalk tonen
+  alerts-empty-here: Er is niets afgegaan voor wat je bekijkt.
+  all-activity: Alle activiteit
+  metrics-no-container: Open een container om de geschiedenis te zien.
+  metrics-loading: Geschiedenis laden…
+  metrics-failed: Kon de geschiedenis niet laden.
+  metrics-empty: Nog niets vastgelegd voor dit venster.
+  metrics-peak: piek
+  metrics-bucket: "{duration}-gemiddelden"
+  window-1h: 1u
+  window-6h: 6u
+  window-24h: 24u
+  window-7d: 7 d
+cloud-chat:
+  title: Vraag het Dozzle
+  close: Sluiten
+  clear: Chat wissen
+  empty: Stel een vraag over wat je ziet. De assistent kent deze weergave en leest deze logs.
+  thinking: Aan het denken…
+  doing:
+    logs: Logs lezen…
+    containers: Containers bekijken…
+    stats: Resourcegebruik controleren…
+    inspect: Container inspecteren…
+    notifications: Meldingen controleren…
+    action: Actie uitvoeren…
+    working: Bezig…
+  step:
+    logs: Logs doorzoeken
+    containers: Containers bekijken
+    stats: Resourcegebruik controleren
+    inspect: Container inspecteren
+    alerts: Waarschuwingen bekijken
+    findings: Bevindingen bekijken
+    events: Containergeschiedenis controleren
+    docs: Documentatie lezen
+    notifications: Meldingen controleren
+    action: Actie uitvoeren
+  phase:
+    reading: Vraag lezen
+    reviewing: Resultaten doornemen
+    writing: Antwoord schrijven
+    retrying: Duurt langer dan normaal, opnieuw proberen
+  found: "{n} gevonden"
+  nothing-found: niets gevonden
+  worked-for: "{time} gewerkt"
+  earlier: "{n} eerdere"
+  placeholder: Vraag over deze logs
+  historical: historisch
+  n-containers: "{n} containers"
+  evidence: Wordt met je vraag meegestuurd
+  lines-in-view: "{n} regels in beeld"
+  this-log: Deze logregel
+  remove-log: Deze logregel verwijderen
+  send: Versturen
+  suggest-summarize: Vat samen wat er gebeurt
+  suggest-errors: Zoek de fouten en waarschuwingen
+  suggest-next: Waar moet ik hierna kijken?
+  error-unavailable: De assistent is nu niet beschikbaar.
+  error-not-configured: Dozzle Cloud is niet gekoppeld, dus er is geen assistent om iets aan te vragen.
+  section-ask: Assistent
+  ask-for: Dozzle vragen over {query}
+  ask-hint: Antwoordt vanuit de zichtbare containers
+  ask-shortcut: om te vragen
 cloud-search:
   containers-section: "Containers"
+  section-logs: "Logs"
+  no-matches: "Geen containers of commando's gevonden"
+  nav-hint: "navigeren"
+  pin-shortcut: "kolom vastzetten"
+  merge-shortcut: "samenvoegen in stream"
+  unmerge-shortcut: "uit stream verwijderen"
   search-logs-for: 'Logs zoeken op "{query}"'
   across-containers: "geïndexeerd over al je containers"
   connect-to-enable: "Dozzle Cloud verbinden om logs te zoeken"
@@ -472,27 +858,26 @@ cloud-search:
   open-container: "container openen"
   search-logs-shortcut: "logs zoeken"
   cloud-connected: "Cloud verbonden"
+  cloud-error: "Cloud-verbindingsfout"
   results-page-title: "Logs doorzoeken"
   no-results: "Geen overeenkomende logregels."
   search-failed: "Cloud-zoekopdracht mislukt."
   search-empty-prompt: "Typ een zoekopdracht om logs te doorzoeken."
   searching: "Zoeken…"
   hits-count: "{n} treffers"
-  window-suffix: "in de afgelopen 14 dagen"
+  window-since: "sinds {time}"
   hero-title-cloud: "Containers en logs zoeken"
   hero-title-plain: "Containers zoeken"
   hero-pill-indexed: "Cloud-index"
   modal-placeholder-cloud: "Containers en logs zoeken…"
   modal-placeholder-plain: "Containers zoeken…"
-  col-time: "Tijd"
-  col-level: "Niveau"
-  col-container: "Container"
-  col-message: "Bericht"
   container-removed: "Container is verwijderd"
   cta-settings: "Cloud-instellingen"
   container-removed-pill: "verwijderd"
 command-palette:
   section-commands: Opdrachten
+  section-recent: "Recent"
+  run-hint: "commando uitvoeren"
   restart-container: "{name} opnieuw starten"
   stop-container: "{name} stoppen"
   start-container: "{name} starten"
@@ -507,3 +892,349 @@ command-palette:
   toggle-std: stdout/stderr-labels omschakelen
   toggle-scrollbars: Kleinere schuifbalken omschakelen
   open-settings: Instellingen openen
+  section-updates: "Updates beschikbaar"
+  section-hosts: "Hosts"
+  open-analytics: "Loganalyse openen"
+  clear-logs: "Logs wissen"
+  attach-shell: "Koppelen aan {name}"
+  exec-shell: "Shell openen in {name}"
+  open-assistant: "De assistent vragen"
+  check-container-updates: "{name} controleren op updates"
+  skip-update: "Deze update voor {name} overslaan"
+  review-updates: "1 update bekijken | {count} updates bekijken"
+  confirm-stop: "Druk nogmaals op ↵ om {name} te stoppen"
+  confirm-update: "Druk nogmaals op ↵ om {name} bij te werken"
+  confirm-hint: "bevestigen"
+  open-settings-page: "Instellingen: {page}"
+  open-notifications: "Meldingen openen"
+  open-logs: "Logs openen"
+  state-on: "Aan"
+  state-off: "Uit"
+  prefix-commands: "opdrachten"
+  prefix-hosts: "hosts"
+  prefix-ask: "vragen"
+  actions-hint: "acties"
+  actions-placeholder: "Acties filteren…"
+  back-hint: "terug"
+setup:
+  title: Dozzle instellen
+  next: Volgende
+  back: Terug
+  finish-later: Later afronden
+  close: Sluiten
+  copy: Kopiëren
+  steps:
+    login: Inloggen
+    login-note: Doe dit eerst
+    actions: Acties en shell
+    cloud: Dozzle Cloud
+    cloud-note: Optioneel
+    hosts: "Hosts"
+    hosts-note: "Optioneel"
+    update: "Automatisch bijwerken"
+    update-note: "Vereist acties"
+    restart: Herstarten
+  login:
+    title: Inloggen inschakelen
+    subtitle: Iedereen die Dozzle kan bereiken, kan je logs lezen. Beveilig het voordat je iets anders doet.
+    no-data-title: /data is niet gekoppeld
+    no-data-body: Gebruikers en instellingen worden opgeslagen in /data. Zonder volume zijn ze weg zodra de container opnieuw wordt aangemaakt. Koppel er een en controleer opnieuw.
+    check-again: Opnieuw controleren
+    tab-account: Dozzle-account
+    tab-proxy: Mijn proxy
+    tab-oidc: OIDC
+    username: Gebruikersnaam
+    email: E-mail
+    optional: (optioneel)
+    password: Wachtwoord
+    confirm: Wachtwoord bevestigen
+    password-hint: Minstens 8 tekens. Letters, cijfers, punten, streepjes en underscores in de gebruikersnaam.
+    mismatch: De wachtwoorden komen niet overeen.
+    saved-volume: Opgeslagen op een gekoppeld volume
+    after-restart: Inloggen wordt ingeschakeld na de herstart
+    on: Inloggen is ingeschakeld
+    users-exist: Er bestaat al een users.yml. Stel de auth-provider in op simple om die te gebruiken.
+    create-account: Account aanmaken
+    proxy-body: Authelia, Authentik, Cloudflare Access en vergelijkbare tools laten gebruikers inloggen en geven de gebruikersnaam door aan Dozzle in de Remote-User-header.
+    proxy-warning-title: Publiceer alleen de proxy
+    proxy-warning-body: Dozzle vertrouwt die header van iedereen. Als de eigen poort bereikbaar is, kan iedereen zich voordoen als elke gebruiker.
+    proxy-docs: Handleiding forward proxy
+    use-proxy: Mijn proxy gebruiken
+    oidc-body: OIDC heeft een client secret nodig, dus hier wordt niets opgeslagen. Voeg dit toe aan je compose-bestand en maak de container opnieuw aan.
+    oidc-docs: Handleiding OpenID Connect
+    skip: "Doorgaan zonder inloggen"
+    manual-restart: Dozzle kan zichzelf hier niet herstarten. Herstart de container om inloggen in te schakelen, of stel dit in je compose-bestand in.
+    restart-hint: Je komt op de inlogpagina terecht. De installatie gaat verder nadat je bent ingelogd.
+  actions:
+    title: Acties en shell
+    subtitle: Bepaal wat Dozzle met je containers mag doen.
+    example-status: Gestopt (1) 2 minuten geleden
+    example-restart: Herstarten
+    example: "Voorbeeld"
+    actions-label: Starten, stoppen en herstarten
+    actions-desc: Herstel een gecrashte container vanaf de pagina waar je de fout vond.
+    shell-label: Shell
+    shell-desc: Koppel aan een container of voer er opdrachten in uit.
+    shell-warning: Shelltoegang tot een container staat vaak gelijk aan toegang tot de host. Laat het uit, tenzij je het nodig hebt.
+    locked: "Ingesteld door {env}"
+    window-closed: "Zonder inloggen accepteert de installatie alleen wijzigingen in de eerste 15 minuten van een nieuwe installatie. Stel dit in met omgevingsvariabelen, of zet eerst inloggen aan."
+    window-closed-env: "Zonder inloggen accepteert de installatie alleen wijzigingen in de eerste 15 minuten van een nieuwe installatie. Stel {envs} in je compose-bestand in, of zet eerst inloggen aan."
+    no-access: Je account kan deze instellingen niet wijzigen.
+    restart-note: Deze worden actief nadat Dozzle is herstart.
+  hosts:
+    title: "Nog een host toevoegen"
+    subtitle: "Zie de containers op je andere machines vanuit deze Dozzle. Start op elke machine een agent en voeg hier het adres toe."
+    run-title: "Start de agent"
+    run-body: "Zet dit op de andere machine in een compose-bestand en start het. Houd poort 7007 op een privénetwerk."
+    custom-cert: "Deze Dozzle gebruikt een eigen certificaat, dus de agent heeft hetzelfde paar nodig, anders weigert hij de verbinding."
+    cert-docs: "Handleiding certificaten"
+    connect-title: "Maak verbinding"
+    address: "Adres"
+    name: "Naam"
+    optional: "(optioneel)"
+    add: "Host toevoegen"
+    connect-note: "Dozzle maakt eerst verbinding en slaat daarna op. De host verschijnt meteen, zonder herstart."
+    added: "{name} is verbonden."
+    list-title: "Agents"
+    connected: "Verbonden"
+    offline: "Niet verbonden"
+    remove: "Verwijderen"
+    skip: "Niet nu"
+    error-exists: "Die agent is al toegevoegd."
+    error-duplicate: "Die machine is al verbonden als een andere host. Deelt deze agent dezelfde Docker-engine, geef de agent dan een eigen DOZZLE_HOST_ID."
+    error-connect: "Kan geen verbinding maken met de agent: {reason}"
+    error-cert: "De agent heeft een ander certificaat dan deze Dozzle. Kopieer het fragment opnieuw, werk de agent bij en maak hem opnieuw aan."
+    error-cert-custom: "De agent heeft het eigen certificaat van deze Dozzle niet. Geef de agent dezelfde certificaat- en sleutelbestanden en maak hem opnieuw aan."
+    error-unsupported-mode: "In deze modus kunnen hier geen hosts worden toegevoegd of verwijderd."
+    error-invalid: "Dat adres of die naam is ongeldig."
+    error-rate-limited: "Te veel pogingen. Wacht een minuut en probeer het opnieuw."
+    error-env-agent: "Deze agent is ingesteld met DOZZLE_REMOTE_AGENT en kan alleen daar worden verwijderd."
+    error-not-found: "Die agent staat niet meer in de lijst."
+    error-custom-cert: "Deze Dozzle gebruikt al een eigen certificaat, dus er is geen privécertificaat om aan te maken."
+    private-label: "Privécertificaat"
+    private-desc: "Alleen deze Dozzle kan verbinding maken met de agent. Andere agents veranderen niet."
+    private-warning: "Dit fragment bevat een privésleutel. Behandel het als een wachtwoord."
+    private-pill: "privé"
+    private-error: "Kan geen privécertificaat maken, dus het gedeelde wordt gebruikt. {reason}"
+    private-missing: "Deze Dozzle heeft nog geen privécertificaat. Zet Privécertificaat weer aan en probeer het opnieuw."
+  cloud:
+    title: Dozzle Cloud koppelen
+    subtitle: Weet wanneer er iets stukgaat zonder een tabblad open te houden.
+    alerts-title: Meldingen zodra er iets stukgaat
+    alerts-body: "Crashes, OOM-kills en foutpieken, verstuurd naar Telegram, Discord, Slack of e-mail."
+    chat-title: "Vraag vanaf je telefoon wat er stuk is"
+    chat-body: "Stuur de Telegram- of Discord-bot een bericht. Hij leest je logs en herstart, met acties aan, een container zodra je bevestigt."
+    updates-title: "Updates die gecontroleerd worden"
+    updates-body: "Na elke automatische update vergelijkt Dozzle Cloud de fouten met daarvoor en biedt een rollback aan als ze erger werden."
+    connect: Dozzle Cloud koppelen
+    learn-more: Meer informatie
+    skip: "Niet nu"
+  update:
+    pill-on: "Gebruikt acties · aan"
+    pill-pending: "Gaat aan met acties"
+    title: "Houd containers up-to-date"
+    subtitle: "Op een rustig uur zoekt Dozzle naar nieuwere images en werkt het zichzelf en de containers die jij kiest bij. Instellingen, gebruikers en meldingen blijven."
+    auto-label: "Automatisch bijwerken"
+    auto-desc: "Controleert op nieuwere images en werkt Dozzle en de containers hieronder bij als die er zijn."
+    when-label: "Wanneer"
+    time-label: "Tijd"
+    server-time: "Gebruikt de tijdzone van de server."
+    daily: "Dagelijks"
+    weekly: "Wekelijks op zondag"
+    version-label: "Versie"
+    update-now: "Nu bijwerken"
+    pulling: "Nieuwe image ophalen"
+    up-to-date: "Dozzle is al up-to-date."
+    restarting: "Dozzle vervangt zichzelf door de nieuwe versie."
+    restarting-hint: "De pagina herlaadt zodra de nieuwe versie reageert."
+    needs-actions: "Nu bijwerken werkt zodra acties aan staan, na de herstart."
+    reason-pinned-tag: "Je gebruikt een vaste versietag, dus er is niets nieuwers om op te halen. Gebruik een tag zoals latest om updates te krijgen."
+    reason-unsupported: "Dozzle kan hier zijn eigen container niet vinden en kan zichzelf dus niet vervangen."
+    reason-swarm-worker: "Dozzle draait als Swarm-service op een worker-node. Alleen een manager kan de service bijwerken, dus draai Dozzle op een manager of werk het bij met docker service update."
+    pull-denied: "{image} kon niet worden opgehaald. Misschien bestaat het alleen op deze machine, of vraagt de registry om docker login."
+  restart:
+    title: Dozzle herstarten
+    subtitle: Deze wijzigingen zijn opgeslagen en werken na een herstart.
+    change-auth: Inloggen
+    "on": "Aan"
+    "off": "Uit"
+    button: Dozzle herstarten
+    restarting: Dozzle wordt herstart
+    restarting-hint: De pagina herlaadt zodra Dozzle weer terug is.
+    slow-title: Dit duurt even
+    slow-body: Dozzle is nog niet terug. Controleer de container en herlaad dan.
+    reload: Herladen
+    manual: Dozzle kan zichzelf hier niet herstarten. Herstart de container, of stel dit in je compose-bestand in.
+    done-title: Je bent klaar
+    done-body: Er is geen herstart nodig. Je kunt hier altijd terugkomen via Instellingen.
+    nothing-title: "Niets om te herstarten"
+    nothing-body: "Er is deze keer geen stap ingesteld. Open de installatie vanuit Instellingen wanneer je er klaar voor bent."
+    done: Klaar
+  error:
+    generic: Er is iets misgegaan. Probeer het opnieuw.
+    load: Kan de installatie niet laden. Probeer het later opnieuw.
+    conflict: Dit is al ingesteld, of vastgelegd door een omgevingsvariabele.
+    no-data: /data is niet gekoppeld, dus dit kan niet worden opgeslagen.
+    window-closed: "Zonder inloggen accepteert de installatie alleen wijzigingen in de eerste 15 minuten van een nieuwe installatie. Zet inloggen in plaats daarvan aan met omgevingsvariabelen."
+mcp-authorize:
+  title: "MCP-client autoriseren"
+  subtitle: "{client} wil Dozzle namens jou gebruiken."
+  unnamed-client: "Een naamloze client"
+  redirect-label: "Stuurt je terug naar"
+  access-label: "Toegang"
+  access-value: "Containers, logs en statistieken lezen"
+  user-label: "Ingelogd als"
+  hint: "Sta alleen een client toe die je zelf net hebt gekoppeld, en controleer of het adres hierboven het verwachte is."
+  allow: "Toestaan"
+  deny: "Weigeren"
+  return: "Terug naar de client"
+  redirecting: "Terug naar de client. Je kunt dit tabblad sluiten zodra het klaar is."
+  failed: "Dit verzoek kon niet worden voltooid."
+mobile-nav:
+  label: "Hoofdmenu"
+  home: "Start"
+  browse: "Bladeren"
+  back: "Terug"
+time-range:
+  title: "Tijdsbereik"
+  live: "Live"
+  last-15m: "Laatste 15 minuten"
+  last-1h: "Laatste uur"
+  last-6h: "Laatste 6 uur"
+  last-24h: "Laatste 24 uur"
+  custom: "Aangepast bereik"
+  from: "Van"
+  to: "Tot"
+  keep-following: "Blijven volgen"
+  volume: "Logvolume"
+  errors: "Fouten"
+  bucket: "{lines} regels · {errors} fouten"
+  not-scanned: "niet gelezen"
+  invalid: "Het einde moet na het begin liggen."
+  show: "Logs tonen"
+  edge-start: "Vanaf"
+  edge-end: "Tot"
+  show-earlier: "eerder tonen"
+  show-later: "later tonen"
+  to-now: "tot nu"
+  shift-earlier: "Vorig venster"
+  shift-later: "Volgend venster"
+  last-short: "Laatste {span}"
+  since-short: "Sinds {time}"
+  custom-hint: "Kies de dagen en daarna de tijden. Tijden in {zone}."
+  keep-following-hint: "Laat het einde open en blijf nieuwe regels tonen."
+  previous-month: "Vorige maand"
+  next-month: "Volgende maand"
+  empty-range: "Geen logs in dit bereik"
+  empty-range-hint: "Er is niets geschreven tussen {from} en {to}."
+  empty-since: "Geen logs sinds {time}"
+  empty-since-hint: "Nieuwe regels verschijnen hier zodra ze geschreven worden."
+  jump-before: "Eerdere regels · {time}"
+  jump-after: "Latere regels · {time}"
+  empty-window: "Geen logs in dit venster"
+update-marker:
+  updated: "Bijgewerkt"
+  rolled-back: "Teruggezet"
+  undone: "Update ongedaan gemaakt"
+  roll-back: "Terugzetten"
+  by:
+    schedule: "door het automatische updateschema"
+    dozzle: "vanuit Dozzle"
+    cloud: "vanuit Dozzle Cloud"
+  verdict:
+    pending: "Dozzle Cloud houdt deze update in de gaten"
+    clean: "Ziet er goed uit"
+    regressed: "Lijkt kapot"
+    unsure: "Kan een probleem hebben"
+    rolled_back_by_dozzle: "Dozzle heeft de vorige container teruggezet"
+  decision:
+    rolled_back: "Teruggezet"
+    kept: "Behouden"
+auto-update:
+  which-label: "Welke containers"
+  mode-off: "Alleen Dozzle"
+  mode-off-desc: "Andere containers worden gecontroleerd en wachten tot jij ze bijwerkt."
+  mode-all: "Alles"
+  risky: "{count} container bewaart data in een benoemd volume. Een database kan naar een versie gaan die zijn data niet kan lezen. | {count} containers bewaren data in benoemde volumes. Een database kan naar een versie gaan die zijn data niet kan lezen."
+  containers-still: "Andere containers worden nog steeds volgens dit schema bijgewerkt."
+  needs-actions: "Niets wordt vanzelf bijgewerkt zolang containeracties uit staan."
+  containers: "Containers"
+  status-current: "Up-to-date"
+  status-available: "Update beschikbaar"
+  status-pending: "Nog niet gecontroleerd"
+  status-off: "Niet gecontroleerd"
+  status-pinned: "Vastgezet op een digest"
+  status-local: "Lokaal gebouwd"
+  status-private: "Privéregistry"
+  status-unknown: "Kan niet controleren"
+  safety-title: "Vangnet"
+  safety-verify: "Elke update wordt gevolgd en teruggedraaid als de nieuwe container faalt."
+  safety-cleanup: "Het oude image wordt daarna verwijderd. Eén vorig image blijft bewaard om terug te draaien."
+  safety-skip: "Images vastgezet op een digest, lokaal gebouwd of uit een privéregistry zonder login worden overgeslagen."
+  learn-more: "Zo werkt automatisch bijwerken"
+  footnote: "{link} bepaalt welke containers zichzelf bijwerken."
+  footnote-link: "Instellingen → Updates"
+  mode-labelled: "Containers met label"
+  mode-labelled-desc: "Plus de containers met het label {label}."
+  mode-all-desc: "Elke container, behalve met het label {label}."
+  risky-hint: "Geef een container het label {label} om hem uit te sluiten."
+  empty: "Geen enkele container werkt zichzelf bij. Geef een container het label {label} om hem toe te voegen."
+inspect:
+  overview: "Overzicht"
+  ports: "Poorten"
+  mounts: "Mounts"
+  env: "Omgeving"
+  labels: "Labels"
+  id: "ID"
+  command: "Commando"
+  created: "Aangemaakt"
+  started: "Gestart"
+  finished: "Gestopt"
+  restart-policy: "Herstartbeleid"
+  network: "Netwerk"
+  memory-limit: "Geheugenlimiet"
+  cpu-limit: "CPU-limiet"
+  unlimited: "Onbeperkt"
+  oom-killed: "Gestopt door OOM"
+  exit-code: "Exit {code}"
+  restarts: "Herstarts: {count}"
+  show-value: "Waarde tonen"
+  hide-value: "Waarde verbergen"
+  env-hidden: "Waarden zijn verborgen. Om ze te lezen is shell-toegang nodig."
+  load-failed: "Containerdetails konden niet worden geladen."
+  networks: "Netwerken"
+  container-count: "1 container | {count} containers"
+  subnet: "Subnet"
+  gateway: "Gateway"
+  ip-usage: "IP's in gebruik"
+  connected-containers: "Verbonden containers"
+  this-container: "deze container"
+  driver: "Driver"
+  scope: "Bereik"
+  driver-options: "Driveropties"
+  mounted-by: "Gemount door"
+  details-failed: "Details konden niet worden geladen."
+  size: "Grootte"
+  mountpoint: "Koppelpunt"
+reclaim:
+  clean-up: "Opruimen"
+  free-up: "{size} vrijmaken"
+  confirm-title: "{size} vrijmaken op {host}?"
+  cannot-undo: "Dit kan niet ongedaan worden gemaakt."
+  images-repull: "Een gestopte stack haalt zijn images opnieuw op bij de volgende start."
+  volumes-warning: "1 volume bevat data die nu door geen enkele container wordt gebruikt. Verwijderen wist die data, zoals een database waarvan de container is verwijderd. | {count} volumes bevatten data die nu door geen enkele container wordt gebruikt. Verwijderen wist die data, zoals een database waarvan de container is verwijderd."
+  volumes-confirm: "Ik begrijp het, verwijder de volumes"
+  delete: "Verwijderen"
+  deleting: "{size} vrijmaken…"
+  freed: "{size} vrijgemaakt"
+  failed: "Opruimen mislukt"
+  agent-too-old: "Deze agent kan nog niet opruimen. Werk hem bij naar de nieuwste versie."
+  preview-note: "Opruimen controleert opnieuw wanneer het draait, dus alles wat tot dan buiten gebruik raakt, gaat ook weg."
+  preview-failed: "Kon ze niet ophalen."
+  preview-agent-too-old: "Werk deze agent bij om de lijst te zien."
+  enable-actions: "Schakel containeracties in om hier op te ruimen."
+  schedule-label: "Automatisch opruimen"
+  scheduled-run: "Geplande opruiming"
+  schedule-desc: "Ongebruikte images, gestopte containers en build-cache op alle hosts. Volumes worden nooit verwijderd."
+  last-run: "Laatste run maakte {size} vrij, {when}."
+  last-run-failed: "{count} host kon niet worden opgeruimd, zie de logs. | {count} hosts konden niet worden opgeruimd, zie de logs."

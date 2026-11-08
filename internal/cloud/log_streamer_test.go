@@ -3,6 +3,7 @@ package cloud
 import (
 	"context"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,10 +11,10 @@ import (
 
 	"github.com/amir20/dozzle/internal/container"
 	"github.com/amir20/dozzle/internal/imagecheck"
-	container_support "github.com/amir20/dozzle/internal/support/container"
 	pb "github.com/amir20/dozzle/proto/cloud"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 // fakeClientService is a ClientService that delivers scripted log events.
@@ -51,9 +52,17 @@ func (f *fakeClientService) UpdateContainer(_ context.Context, _ container.Conta
 	close(progressCh)
 	return false, nil
 }
+func (f *fakeClientService) RollbackContainer(_ context.Context, _ container.Container, _ container.RollbackOptions, progressCh chan<- container.UpdateProgress) error {
+	close(progressCh)
+	return nil
+}
 func (f *fakeClientService) LogsBetweenDates(_ context.Context, _ container.Container, _ time.Time, _ time.Time, _ container.StdType) (<-chan *container.LogEvent, error) {
 	return nil, nil
 }
+func (f *fakeClientService) LogHistogram(context.Context, container.Container, time.Time, time.Time, time.Duration) (container.LogHistogram, error) {
+	return container.LogHistogram{}, nil
+}
+
 func (f *fakeClientService) RawLogs(_ context.Context, _ container.Container, _ time.Time, _ time.Time, _ container.StdType) (io.ReadCloser, error) {
 	return nil, nil
 }
@@ -101,7 +110,7 @@ func (f *fakeHostService) ListAllContainers(_ container.ContainerLabels) ([]cont
 	return append([]container.Container(nil), f.containers...), nil
 }
 
-func (f *fakeHostService) FindContainer(host string, id string, _ container.ContainerLabels) (*container_support.ContainerService, error) {
+func (f *fakeHostService) FindContainer(host string, id string, _ container.ContainerLabels) (*container.ContainerService, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	client, ok := f.clients[host]
@@ -110,7 +119,7 @@ func (f *fakeHostService) FindContainer(host string, id string, _ container.Cont
 	}
 	for _, c := range f.containers {
 		if c.ID == id && c.Host == host {
-			return container_support.NewContainerService(client, c), nil
+			return container.NewContainerService(client, c), nil
 		}
 	}
 	return nil, assert.AnError
@@ -126,7 +135,7 @@ func (f *fakeHostService) Hosts() []container.Host {
 	return hosts
 }
 
-func (f *fakeHostService) SubscribeContainersStarted(_ context.Context, ch chan<- container.Container, _ container_support.ContainerFilter) {
+func (f *fakeHostService) SubscribeContainersStarted(_ context.Context, ch chan<- container.Container, _ container.ContainerFilter) {
 	f.mu.Lock()
 	f.startedCh = ch
 	f.mu.Unlock()
@@ -532,4 +541,60 @@ func TestLogStreamer_BatchFlushesOnMaxEntries(t *testing.T) {
 	cancel()
 	<-runDone
 	t.Fatal("expected a batch with >= logBatchMaxEntries entries")
+}
+
+func TestLogStreamer_OversizedLineIsClippedAndSentAlone(t *testing.T) {
+	client := newFakeClientService("host-1")
+	hs := &fakeHostService{
+		containers: []container.Container{
+			{ID: "c1", Name: "n", Host: "host-1", State: "running"},
+		},
+		clients: map[string]*fakeClientService{"host-1": client},
+	}
+
+	var sendMu sync.Mutex
+	var sent []*pb.LogBatch
+	send := func(resp *pb.ToolResponse) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		if lb := resp.GetLogBatch(); lb != nil {
+			sent = append(sent, lb)
+		}
+		return nil
+	}
+	ls := newLogStreamer(hs, nil, send)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	runDone := make(chan struct{})
+	go func() { ls.run(ctx); close(runDone) }()
+
+	<-client.wait
+	ts := time.Now().UnixMilli()
+	client.logsCh <- &container.LogEvent{Timestamp: ts, RawMessage: "before", Stream: "stdout"}
+	// The shape from #5229: one line well past gRPC's 4MiB default.
+	client.logsCh <- &container.LogEvent{Timestamp: ts, RawMessage: strings.Repeat("x", 5*1024*1024), Stream: "stdout"}
+	client.logsCh <- &container.LogEvent{Timestamp: ts, RawMessage: "after", Stream: "stdout"}
+
+	collectBatches(t, &sendMu, &sent, 3, 3*time.Second)
+	cancel()
+	<-runDone
+
+	sendMu.Lock()
+	defer sendMu.Unlock()
+	for _, b := range sent {
+		assert.Less(t, proto.Size(b), 4*1024*1024, "a batch must stay under gRPC's default frame limit")
+	}
+	var huge *pb.LogBatchEntry
+	for _, b := range sent {
+		for _, e := range b.Entries {
+			if len(e.Message) > 1024 {
+				require.Nil(t, huge)
+				require.Len(t, b.Entries, 1, "the oversized entry travels on its own")
+				huge = e
+			}
+		}
+	}
+	require.NotNil(t, huge)
+	assert.True(t, strings.HasSuffix(huge.Message, container.LogTruncationSuffix))
+	assert.LessOrEqual(t, len(huge.Message), container.MaxLogLineBytes+len(container.LogTruncationSuffix))
 }

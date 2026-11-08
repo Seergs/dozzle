@@ -1,38 +1,29 @@
 import { Component, ComputedRef, Ref, ShallowRef } from "vue";
-import type { CloudAlert, CloudEvent } from "@/composable/cloudAlerts";
+import type { CloudAlert, CloudEvent } from "@/composable/cloud/cloudAlerts";
 import { flattenJSON } from "@/utils";
-import ComplexLogItem from "@/components/LogViewer/ComplexLogItem.vue";
-import SimpleLogItem from "@/components/LogViewer/SimpleLogItem.vue";
-import GroupedLogItem from "@/components/LogViewer/GroupedLogItem.vue";
-import ContainerEventLogItem from "@/components/LogViewer/ContainerEventLogItem.vue";
-import SkippedEntriesLogItem from "@/components/LogViewer/SkippedEntriesLogItem.vue";
-import LoadMoreLogItem from "@/components/LogViewer/LoadMoreLogItem.vue";
-import AlertLogItem from "@/components/LogViewer/AlertLogItem.vue";
-import CloudEventLogItem from "@/components/LogViewer/CloudEventLogItem.vue";
+import ComplexLogItem from "@/components/logs/entries/ComplexLogItem.vue";
+import SimpleLogItem from "@/components/logs/entries/SimpleLogItem.vue";
+import GroupedLogItem from "@/components/logs/entries/GroupedLogItem.vue";
+import ContainerEventLogItem from "@/components/logs/entries/ContainerEventLogItem.vue";
+import SkippedEntriesLogItem from "@/components/logs/entries/SkippedEntriesLogItem.vue";
+import LoadMoreLogItem from "@/components/logs/entries/LoadMoreLogItem.vue";
+import RangeEdgeLogItem from "@/components/logs/entries/RangeEdgeLogItem.vue";
+import AlertLogItem from "@/components/logs/entries/AlertLogItem.vue";
+import CloudEventLogItem from "@/components/logs/entries/CloudEventLogItem.vue";
+import DeployLogItem from "@/components/logs/entries/DeployLogItem.vue";
+import type { ContainerUpdate, DeployVerdict } from "@/models/ContainerUpdate";
 
 export type JSONValue = string | number | boolean | JSONObject | Array<JSONValue>;
 export type JSONObject = { [x: string]: JSONValue };
 export type Std = "stdout" | "stderr";
-export type LogType = "single" | "group" | "complex";
 export type Position = "start" | "end" | "middle" | undefined;
 export type LogMessage = string | string[] | JSONObject;
 export type Level =
   "error" | "warn" | "warning" | "info" | "debug" | "trace" | "severe" | "critical" | "fatal" | "unknown";
 
-export interface LogFragment {
-  readonly m: string;
-}
-
-export interface LogEvent {
-  readonly t: LogType;
-  readonly m: string | LogFragment[] | JSONObject;
-  readonly ts: number;
-  readonly id: number;
-  readonly l: Level;
-  readonly s: "stdout" | "stderr" | "unknown";
-  readonly c: string;
-  readonly rm: string;
-}
+// Generated from internal/container/types.go by tygo; see tygo.yaml.
+import type { LogEvent, LogFragment, LogType } from "@/types/generated/container";
+export type { LogEvent, LogFragment, LogType };
 
 /**
  * The matched event behind a log line, when Cloud reports one. Attached to the
@@ -61,6 +52,23 @@ export interface MatchedEvent {
  */
 const matchedEvents = new WeakMap<LogEntry<LogMessage>, ShallowRef<MatchedEvent | undefined>>();
 
+/**
+ * What Dozzle Cloud's error memory knows about the pattern behind a line. Kept
+ * beside the entry for the same reasons as matched events above.
+ */
+export interface PatternMemory {
+  status: "new" | "louder" | "known" | "learning";
+  /** The collapsed pattern, e.g. "connection refused to <IP4>:<N>". */
+  pattern: string;
+  /** Nanoseconds; absent when Cloud has never seen the pattern. */
+  firstSeen?: number;
+  daysSeen?: number;
+  ratePerHour: number;
+  usualRatePerHour: number;
+}
+
+const patternMemories = new WeakMap<LogEntry<LogMessage>, ShallowRef<PatternMemory | undefined>>();
+
 export abstract class LogEntry<T extends LogMessage> {
   protected readonly _message: T;
 
@@ -70,6 +78,14 @@ export abstract class LogEntry<T extends LogMessage> {
   }
   public set matchedEvent(event: MatchedEvent | undefined) {
     matchedEventRef(this).value = event;
+  }
+
+  /** Cloud's error memory for this line's pattern, once the loader reports it. */
+  public get patternMemory(): PatternMemory | undefined {
+    return patternMemoryRef(this).value;
+  }
+  public set patternMemory(memory: PatternMemory | undefined) {
+    patternMemoryRef(this).value = memory;
   }
   constructor(
     message: T,
@@ -96,9 +112,10 @@ export class SimpleLogEntry extends LogEntry<string> {
     containerID: string,
     id: number,
     date: Date,
-    public readonly level: Level,
+    public readonly level: Level | undefined,
     public readonly std: Std,
     public readonly rawMessage: string,
+    public readonly timestampPrefix: number = 0,
   ) {
     super(message, containerID, id, date, std, rawMessage, level);
   }
@@ -113,8 +130,10 @@ export class GroupedLogEntry extends LogEntry<string[]> {
     containerID: string,
     id: number,
     date: Date,
-    public readonly level: Level,
+    public readonly level: Level | undefined,
     public readonly std: Std,
+    /** Per line, see SimpleLogEntry.timestampPrefix. */
+    public readonly timestampPrefixes: number[] = [],
   ) {
     super(messages as any, containerID, id, date, std, "", level);
   }
@@ -136,7 +155,7 @@ export class ComplexLogEntry extends LogEntry<JSONObject> {
     containerID: string,
     id: number,
     date: Date,
-    public readonly level: Level,
+    public readonly level: Level | undefined,
     public readonly std: Std,
     public readonly rawMessage: string,
     visibleKeys?: Ref<Map<string[], boolean>>,
@@ -195,6 +214,7 @@ export class ComplexLogEntry extends LogEntry<JSONObject> {
     // away before it was drawn. Sharing the ref rather than copying the value
     // also keeps a badge that arrives after this clone was made.
     matchedEvents.set(clone, matchedEventRef(event));
+    patternMemories.set(clone, patternMemoryRef(event));
     return clone;
   }
 }
@@ -210,6 +230,51 @@ export class ContainerEventLogEntry extends LogEntry<string> {
   }
   getComponent(): Component {
     return ContainerEventLogItem;
+  }
+}
+
+/**
+ * The update that created the container: "1.4.1 → 1.4.2", at the top of the new
+ * container's lines. Dozzle sends it on the stream from the updates it made; for an
+ * update Dozzle no longer remembers (a restart since) Dozzle Cloud's record of it
+ * stands in. Dozzle Cloud's verdict is filled in once it answers.
+ */
+export class DeployLogEntry extends LogEntry<string> {
+  private readonly _verdict = shallowRef<DeployVerdict | undefined>();
+
+  constructor(
+    public readonly update: ContainerUpdate,
+    date: Date,
+  ) {
+    // Keyed on the negated time: LogList needs a number unique among the rows,
+    // and a container-started row can share the very millisecond the update
+    // finished in. Log ids are unsigned hashes, so a negative one is free.
+    super("", update.newId, -date.getTime(), date, "stderr", "");
+  }
+
+  /**
+   * Names one update: the container it left running and when it finished. The
+   * container alone is not enough, since a rollback leaves the old container
+   * running again, under the same id as the update it undid.
+   */
+  static key(containerID: string, date: Date): string {
+    return `${containerID}@${date.getTime()}`;
+  }
+
+  public get updateKey(): string {
+    return DeployLogEntry.key(this.containerID, this.date);
+  }
+
+  getComponent(): Component {
+    return DeployLogItem;
+  }
+
+  /** Dozzle Cloud's verdict on this update, once it answers. */
+  public get verdict(): DeployVerdict | undefined {
+    return this._verdict.value;
+  }
+  public set verdict(verdict: DeployVerdict | undefined) {
+    this._verdict.value = verdict;
   }
 }
 
@@ -345,6 +410,36 @@ export class LoadMoreLogEntry extends LogEntry<string> {
   }
 }
 
+export type RangeEdgeAction = { label: string; run: () => void };
+
+/**
+ * Where a time range stops, at the top or the bottom of the stream, with the
+ * ways to move that end. It takes the place of the load-more row once nothing is
+ * left to load inside the range.
+ */
+export class RangeEdgeLogEntry extends LogEntry<string> {
+  constructor(
+    date: Date,
+    public readonly edge: "start" | "end",
+    public readonly actions: RangeEdgeAction[],
+  ) {
+    super("", "", date.getTime(), date, "stderr", "info");
+  }
+
+  getComponent(): Component {
+    return RangeEdgeLogItem;
+  }
+}
+
+function patternMemoryRef(entry: LogEntry<any>): ShallowRef<PatternMemory | undefined> {
+  let existing = patternMemories.get(entry);
+  if (!existing) {
+    existing = shallowRef<PatternMemory | undefined>(undefined);
+    patternMemories.set(entry, existing);
+  }
+  return existing;
+}
+
 function matchedEventRef(entry: LogEntry<any>): ShallowRef<MatchedEvent | undefined> {
   let existing = matchedEvents.get(entry);
   if (!existing) {
@@ -356,21 +451,35 @@ function matchedEventRef(entry: LogEntry<any>): ShallowRef<MatchedEvent | undefi
 
 export function asLogEntry(event: LogEvent): LogEntry<LogMessage> {
   const std = event.s === "unknown" ? "stderr" : (event.s ?? "stderr");
+  // omitempty in Go, like every field but ts
+  const containerId = event.c ?? "";
+  const id = event.id ?? 0;
+  const raw = event.rm ?? "";
 
   switch (event.t) {
     case "complex":
-      return new ComplexLogEntry(event.m as JSONObject, event.c, event.id, new Date(event.ts), event.l, std, event.rm);
+      return new ComplexLogEntry(event.m as JSONObject, containerId, id, new Date(event.ts), event.l, std, raw);
     case "group":
       return new GroupedLogEntry(
         (event.m as LogFragment[]).map((f) => f.m),
-        event.c,
-        event.id,
+        containerId,
+        id,
         new Date(event.ts),
         event.l,
         std,
+        (event.m as LogFragment[]).map((f) => f.tp ?? 0),
       );
     case "single":
     default:
-      return new SimpleLogEntry(event.m as string, event.c, event.id, new Date(event.ts), event.l, std, event.rm);
+      return new SimpleLogEntry(
+        event.m as string,
+        containerId,
+        id,
+        new Date(event.ts),
+        event.l,
+        std,
+        raw,
+        event.tp ?? 0,
+      );
   }
 }

@@ -1,0 +1,780 @@
+import { createTestingPinia } from "@pinia/testing";
+import { mount } from "@vue/test-utils";
+import { useSearchFilter } from "@/composable/logs/search";
+import { settings } from "@/stores/settings";
+import EventSource, { sources } from "@/testing/eventSourceMock";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { computed, defineComponent, h, nextTick, shallowRef, type Ref } from "vue";
+import { createI18n } from "vue-i18n";
+import { createRouter, createWebHistory } from "vue-router";
+import { default as EventSourceComponent } from "./EventSource.vue";
+import SearchStatus from "./SearchStatus.vue";
+import IndeterminateBar from "@/components/ui/IndeterminateBar.vue";
+import ContainerEventLogItem from "./entries/ContainerEventLogItem.vue";
+import DeployLogItem from "./entries/DeployLogItem.vue";
+import LoadMoreLogItem from "./entries/LoadMoreLogItem.vue";
+import type { TimeRange } from "@/composable/logs/timeRange";
+import LogViewer from "./LogViewer.vue";
+import { Container } from "@/models/Container";
+import type { ContainerState } from "@/types/Container";
+import { DeployLogEntry, Level, LoadMoreLogEntry, type LogEntry } from "@/models/LogEntry";
+import { useCloudConfig } from "@/composable/cloud/cloudConfig";
+import { containerFixture } from "@/testing/containerFixture";
+
+// The component is generic over its entity; mount cannot infer that, so pin it to a container.
+const Component = EventSourceComponent<Container>;
+
+vi.mock("@/stores/config", () => ({
+  __esModule: true,
+  default: { base: "", maxLogs: 400, authProvider: "none", hosts: [{ name: "localhost", id: "localhost" }] },
+  withBase: (path: string) => path,
+}));
+
+/**
+ * @vitest-environment jsdom
+ */
+describe("<ContainerEventSource />", () => {
+  const search = useSearchFilter();
+
+  beforeEach(() => {
+    global.EventSource = EventSource;
+    // @ts-ignore
+    window.scrollTo = vi.fn();
+    global.IntersectionObserver = class IntersectionObserver {
+      observe = vi.fn();
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+      takeRecords = vi.fn();
+      root = null;
+      rootMargin = "";
+      thresholds = [];
+    } as any;
+    vi.useFakeTimers();
+    vi.setSystemTime(1560336942459);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  function createLogEventSource(
+    {
+      searchFilter = "",
+      hourStyle = "auto",
+      state = "running",
+      timeRange = { kind: "live" },
+      entity,
+    }: {
+      searchFilter?: string | undefined;
+      hourStyle?: "auto" | "24" | "12";
+      state?: ContainerState;
+      timeRange?: TimeRange;
+      // Swapped by a parent re-render: setProps cannot carry a Container, whose fields are refs.
+      entity?: Ref<Container>;
+    } = {
+      hourStyle: "auto",
+    },
+  ) {
+    settings.value.hourStyle = hourStyle;
+    search.searchQueryFilter.value = searchFilter;
+    if (searchFilter) {
+      search.showSearch.value = true;
+    }
+
+    const router = createRouter({
+      history: createWebHistory("/"),
+      routes: [
+        {
+          path: "/",
+          component: {
+            template: "Test from createLogEventSource",
+          },
+        },
+        {
+          name: "/container/[id].time.[datetime]",
+          path: "/container/:id/time/:datetime",
+          component: {
+            template: "Test from createLogEventSource",
+          },
+        },
+      ],
+    });
+
+    const global = {
+      plugins: [
+        router,
+        createTestingPinia({
+          createSpy: vi.fn,
+          stubActions: false,
+          initialState: {
+            container: {
+              containers: [
+                {
+                  id: "abc",
+                  image: "test:v123",
+                  host: "localhost",
+                  created: new Date(0),
+                  finishedAt: new Date(0),
+                  state: "running",
+                },
+              ],
+            },
+          },
+        }),
+        createI18n({}),
+      ],
+      components: {
+        LogViewer,
+      },
+      provide: {
+        [scrollContextKey as symbol]: {
+          paused: computed(() => false),
+          loading: computed(() => false),
+          progress: ref(1),
+          available: ref(false),
+          currentDate: ref(new Date()),
+        },
+        [loggingContextKey as symbol]: {
+          containers: computed(() => [
+            {
+              id: "abc",
+              image: "test:v123",
+              host: "localhost",
+              created: new Date(0),
+              finishedAt: new Date(0),
+              state,
+            },
+          ]),
+          streamConfig: reactive({ stdout: true, stderr: true }),
+          hasComplexLogs: ref(false),
+          loadingMore: ref(false),
+          levels: new Set<Level>(["info"]),
+          historical: ref(false),
+          timeRange: ref(timeRange),
+        },
+      },
+    };
+
+    if (entity) {
+      return mount(
+        defineComponent(() => () => h(Component, { streamSource: useContainerStream, entity: entity.value })),
+        {
+          global,
+        },
+      );
+    }
+
+    return mount(Component, {
+      global,
+      slots: {
+        default: `
+        <template #scoped="params"><LogViewer :messages="params.messages" :show-container-name="false" :visible-keys="[]" /></template>
+        `,
+      },
+      props: {
+        streamSource: useContainerStream,
+        entity: containerFixture({ id: "abc", state }),
+      },
+    });
+  }
+
+  const sourceUrl = "/api/containers/logs/stream?container=localhost%2Fabc&stdout=1&stderr=1&levels=info";
+
+  test("renders loading correctly", async () => {
+    const wrapper = createLogEventSource();
+    expect(wrapper.find("ul.animate-pulse").exists()).toBe(true);
+  });
+
+  test("should connect to EventSource", async () => {
+    const wrapper = createLogEventSource();
+    sources[sourceUrl].emitOpen();
+    expect(sources[sourceUrl].readyState).toBe(1);
+    wrapper.unmount();
+  });
+
+  // The stream source is handed a getter over the `entity` prop, so swapping the
+  // prop has to reach it and reconnect for the new container.
+  test("reconnects when the entity prop changes", async () => {
+    const container = (id: string) => containerFixture({ id });
+    const entity = shallowRef(container("abc"));
+    const wrapper = createLogEventSource({ entity });
+    sources[sourceUrl].emitOpen();
+
+    entity.value = container("def");
+    await nextTick();
+    const otherUrl = sourceUrl.replace("abc", "def");
+    expect(sources[otherUrl]).toBeDefined();
+    expect(sources[sourceUrl].readyState).toBe(2);
+    wrapper.unmount();
+  });
+
+  test("should close EventSource", async () => {
+    const wrapper = createLogEventSource();
+    sources[sourceUrl].emitOpen();
+    wrapper.unmount();
+    expect(sources[sourceUrl].readyState).toBe(2);
+  });
+
+  test("should parse messages", async () => {
+    const wrapper = createLogEventSource();
+    sources[sourceUrl].emitOpen();
+    sources[sourceUrl].emitMessage({
+      data: `{"ts":1560336942459, "m":"This is a message.", "id":1, "rm": "This is a message.", "c": "abc"}`,
+    });
+
+    vi.runAllTimers();
+    await nextTick();
+
+    // @ts-ignore
+    const [message, _] = wrapper.vm.messages;
+    expect(message).toMatchSnapshot();
+  });
+
+  test("keeps an overflowing opening burst when the next batch arrives", async () => {
+    const wrapper = createLogEventSource();
+    sources[sourceUrl].emitOpen();
+    const emit = (id: number) =>
+      sources[sourceUrl].emitMessage({
+        data: `{"ts":${1560336942459 + id}, "m":"line ${id}", "id":${id}, "rm": "line ${id}", "c": "abc"}`,
+      });
+
+    for (let id = 1; id <= 500; id++) emit(id);
+    await vi.advanceTimersByTimeAsync(200);
+    // @ts-ignore
+    const opening = wrapper.vm.messages.length;
+    expect(opening).toBe(201);
+
+    emit(501);
+    await vi.advanceTimersByTimeAsync(1100);
+    // @ts-ignore
+    const messages: LogEntry<string>[] = wrapper.vm.messages;
+    expect(messages).toHaveLength(opening + 1);
+    expect(messages.at(-1)?.message).toBe("line 501");
+  });
+
+  // Kubernetes opens with a 500 line tail, over maxLogs, so this is every busy pod.
+  test("an opening burst over maxLogs can still load older lines", async () => {
+    const wrapper = createLogEventSource();
+    sources[sourceUrl].emitOpen();
+    for (let id = 1; id <= 500; id++) {
+      sources[sourceUrl].emitMessage({
+        data: `{"ts":${1560336942459 + id}, "m":"line ${id}", "id":${id}, "rm": "line ${id}", "c": "abc"}`,
+      });
+    }
+    await vi.advanceTimersByTimeAsync(200);
+    // @ts-ignore
+    const messages: LogEntry<string>[] = wrapper.vm.messages;
+    expect(messages[0]).toBeInstanceOf(LoadMoreLogEntry);
+    expect(messages[1].message).toBe("line 301");
+  });
+
+  test("trimming the window to maxLogs keeps a way to load older lines", async () => {
+    const wrapper = createLogEventSource();
+    sources[sourceUrl].emitOpen();
+    let id = 0;
+    const emitBatch = async (count: number) => {
+      for (let i = 0; i < count; i++) {
+        id++;
+        sources[sourceUrl].emitMessage({
+          data: `{"ts":${1560336942459 + id}, "m":"line ${id}", "id":${id}, "rm": "line ${id}", "c": "abc"}`,
+        });
+      }
+      await vi.advanceTimersByTimeAsync(1100);
+    };
+
+    await emitBatch(5);
+    // @ts-ignore
+    const opener = wrapper.vm.messages[0];
+    expect(opener).toBeInstanceOf(LoadMoreLogEntry);
+
+    for (let i = 0; i < 4; i++) await emitBatch(150);
+
+    // @ts-ignore
+    const messages: LogEntry<string>[] = wrapper.vm.messages;
+    expect(messages[0]).toBeInstanceOf(LoadMoreLogEntry);
+    // A fresh row: the old one may remember a start that has since been trimmed away.
+    expect(messages[0]).not.toBe(opener);
+    expect(messages.at(-1)?.message).toBe(`line ${id}`);
+  });
+
+  test("keeps the view across a reconnect and drops the replayed tail", async () => {
+    const wrapper = createLogEventSource();
+    sources[sourceUrl].emitOpen();
+    const emit = (id: number) =>
+      sources[sourceUrl].emitMessage({
+        data: `{"ts":${1560336942459 + id}, "m":"line ${id}", "id":${id}, "rm": "line ${id}", "c": "abc"}`,
+      });
+
+    for (let id = 1; id <= 5; id++) emit(id);
+    await vi.advanceTimersByTimeAsync(200);
+    // @ts-ignore
+    const before: LogEntry<string>[] = wrapper.vm.messages;
+
+    // the mock has no static readyState constants
+    Object.assign(EventSource, { CONNECTING: 0, OPEN: 1, CLOSED: 2 });
+    const dropped = sources[sourceUrl];
+    dropped.readyState = 2;
+    dropped.emitError();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sources[sourceUrl]).not.toBe(dropped);
+
+    sources[sourceUrl].emitOpen();
+    for (let id = 3; id <= 7; id++) emit(id);
+    await vi.advanceTimersByTimeAsync(1100);
+
+    // @ts-ignore
+    const after: LogEntry<string>[] = wrapper.vm.messages;
+    expect(after.slice(0, before.length)).toEqual(before);
+    expect(after.slice(before.length).map((m) => m.message)).toEqual(["line 6", "line 7"]);
+
+    // one container's stdout and stderr can be stamped out of delivery order, and a
+    // resume must not start sorting them
+    sources[sourceUrl].emitMessage({
+      data: `{"ts":${1560336942459 + 20}, "m":"line 20", "id":20, "rm": "line 20", "c": "abc"}`,
+    });
+    sources[sourceUrl].emitMessage({
+      data: `{"ts":${1560336942459 + 15}, "m":"line 15", "id":15, "rm": "line 15", "c": "abc"}`,
+    });
+    await vi.advanceTimersByTimeAsync(1100);
+    // @ts-ignore
+    expect(wrapper.vm.messages.slice(-2).map((m: LogEntry<string>) => m.message)).toEqual(["line 20", "line 15"]);
+    wrapper.unmount();
+  });
+
+  test("keeps lines buffered before the first flush when the stream drops", async () => {
+    const wrapper = createLogEventSource();
+    sources[sourceUrl].emitOpen();
+    const emit = (id: number) =>
+      sources[sourceUrl].emitMessage({
+        data: `{"ts":${1560336942459 + id}, "m":"line ${id}", "id":${id}, "rm": "line ${id}", "c": "abc"}`,
+      });
+
+    for (let id = 1; id <= 3; id++) emit(id);
+    // the browser retries on its own: same source, still CONNECTING
+    sources[sourceUrl].readyState = 0;
+    sources[sourceUrl].emitError();
+    sources[sourceUrl].emitOpen();
+    for (let id = 1; id <= 4; id++) emit(id);
+    await vi.advanceTimersByTimeAsync(1100);
+
+    // @ts-ignore
+    const messages: LogEntry<string>[] = wrapper.vm.messages;
+    expect(messages.slice(1).map((m) => m.message)).toEqual(["line 1", "line 2", "line 3", "line 4"]);
+    wrapper.unmount();
+  });
+
+  test("puts matches from the gap after a resumed search, not above the view", async () => {
+    const wrapper = createLogEventSource({ searchFilter: "line" });
+    // the applied filter trails the typed one by a debounce
+    await vi.advanceTimersByTimeAsync(1000);
+    const url = Object.keys(sources).find((k) => k.includes("filter=line"))!;
+    const event = (id: number) => ({
+      ts: 1560336942459 + id,
+      m: `line ${id}`,
+      id,
+      rm: `line ${id}`,
+      c: "abc",
+    });
+    sources[url].emitOpen();
+    sources[url].emit("logs-backfill", { data: JSON.stringify([event(1), event(2)]) });
+    await vi.advanceTimersByTimeAsync(1100);
+
+    sources[url].readyState = 0;
+    sources[url].emitError();
+    sources[url].emitOpen();
+    sources[url].emit("logs-backfill", { data: JSON.stringify([event(0), event(2), event(3), event(4)]) });
+    await vi.advanceTimersByTimeAsync(1100);
+
+    // @ts-ignore
+    const messages: LogEntry<string>[] = wrapper.vm.messages;
+    expect(messages.map((m) => m.message)).toEqual(["line 0", "line 1", "line 2", "line 3", "line 4"]);
+    search.searchQueryFilter.value = "";
+    search.showSearch.value = false;
+    wrapper.unmount();
+  });
+
+  test("puts a search's backfill below the load-more row, in time order", async () => {
+    const wrapper = createLogEventSource({ searchFilter: "line" });
+    await vi.advanceTimersByTimeAsync(1000);
+    const url = Object.keys(sources).find((k) => k.includes("filter=line"))!;
+    const event = (id: number) => ({ ts: 1560336942459 + id, m: `line ${id}`, id, rm: `line ${id}`, c: "abc" });
+    sources[url].emitOpen();
+    // The live tail flushes first, and opens the view under the row.
+    sources[url].emitMessage({ data: JSON.stringify(event(5)) });
+    await vi.advanceTimersByTimeAsync(300);
+
+    sources[url].emit("logs-backfill", { data: JSON.stringify([event(4), event(6)]) });
+    sources[url].emit("logs-backfill", { data: JSON.stringify([event(1), event(2)]) });
+
+    // @ts-ignore
+    const [head, ...rest]: LogEntry<string>[] = wrapper.vm.messages;
+    expect(head).toBeInstanceOf(LoadMoreLogEntry);
+    expect(rest.map((m) => m.message)).toEqual(["line 1", "line 2", "line 4", "line 5", "line 6"]);
+    search.searchQueryFilter.value = "";
+    search.showSearch.value = false;
+    wrapper.unmount();
+  });
+
+  test("keeps a search's backfill that arrives before the first flush", async () => {
+    const wrapper = createLogEventSource({ searchFilter: "line" });
+    await vi.advanceTimersByTimeAsync(1000);
+    const url = Object.keys(sources).find((k) => k.includes("filter=line"))!;
+    const event = (id: number) => ({ ts: 1560336942459 + id, m: `line ${id}`, id, rm: `line ${id}`, c: "abc" });
+    sources[url].emitOpen();
+    sources[url].emit("logs-backfill", { data: JSON.stringify([event(1), event(2)]) });
+    sources[url].emitMessage({ data: JSON.stringify(event(5)) });
+    await vi.advanceTimersByTimeAsync(300);
+
+    // @ts-ignore
+    const [head, ...rest]: LogEntry<string>[] = wrapper.vm.messages;
+    expect(head).toBeInstanceOf(LoadMoreLogEntry);
+    expect(rest.map((m) => m.message)).toEqual(["line 1", "line 2", "line 5"]);
+    search.searchQueryFilter.value = "";
+    search.showSearch.value = false;
+    wrapper.unmount();
+  });
+
+  test("the load-more spinner stops when a load throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let fire!: (entries: { intersectionRatio: number }[]) => void;
+    global.IntersectionObserver = class {
+      constructor(callback: typeof fire) {
+        fire = callback;
+      }
+      observe = vi.fn();
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+      takeRecords = vi.fn();
+    } as any;
+    const loader = vi.fn(async () => {
+      throw new Error("No loadMoreLogEntry on first item");
+    });
+    const wrapper = mount(LoadMoreLogItem, {
+      props: { logEntry: new LoadMoreLogEntry(new Date(), loader) },
+    });
+    await nextTick();
+
+    fire([{ intersectionRatio: 1 }]);
+    await vi.advanceTimersByTimeAsync(0);
+    await nextTick();
+
+    expect(loader).toHaveBeenCalledOnce();
+    expect((wrapper.find(".loading").element as HTMLElement).style.display).toBe("none");
+    // And the row is live again: the next time it scrolls into view, it loads.
+    fire([{ intersectionRatio: 1 }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loader).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
+
+  describe("live bar", () => {
+    test("lights up on an incoming batch and dims once the stream goes quiet", async () => {
+      const wrapper = createLogEventSource();
+      sources[sourceUrl].emitOpen();
+      sources[sourceUrl].emitMessage({
+        data: `{"ts":1560336942459, "m":"This is a message.", "id":1, "rm": "This is a message.", "c": "abc"}`,
+      });
+
+      // Past the 250ms buffer debounce, so the batch has flushed into messages.
+      await vi.advanceTimersByTimeAsync(300);
+      expect(wrapper.findComponent(IndeterminateBar).props("intensity")).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(wrapper.findComponent(IndeterminateBar).props("intensity")).toBe(0);
+    });
+
+    test("is hidden for a stopped container", () => {
+      const wrapper = createLogEventSource({ state: "exited" });
+      expect(wrapper.findComponent(IndeterminateBar).exists()).toBe(false);
+    });
+  });
+
+  describe("container events", () => {
+    const stopped = (time: string) => ({
+      data: JSON.stringify({ actorId: "abc", name: "container-stopped", time }),
+    });
+
+    test("a stop replayed by a reconnect is not added twice", async () => {
+      const wrapper = createLogEventSource();
+      sources[sourceUrl].emitOpen();
+      sources[sourceUrl].emit("container-event", stopped("2026-10-03T10:00:00Z"));
+      sources[sourceUrl].emit("container-event", stopped("2026-10-03T10:00:00Z"));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(wrapper.findAllComponents(ContainerEventLogItem)).toHaveLength(1);
+    });
+
+    test("a stop before a since floor leaves the range empty", async () => {
+      const since = new Date("2026-10-03T10:00:00Z");
+      const wrapper = createLogEventSource({ timeRange: { kind: "since", since } });
+      const url = Object.keys(sources).find((u) => u.includes("since="))!;
+      sources[url].emitOpen();
+      sources[url].emit("container-event", stopped("2026-10-03T08:00:00Z"));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(wrapper.findAllComponents(ContainerEventLogItem)).toHaveLength(0);
+    });
+  });
+
+  describe("update marker", () => {
+    const update = (at: string) => ({
+      data: JSON.stringify({
+        host: "localhost",
+        name: "test",
+        oldId: "old",
+        newId: "abc",
+        imageRef: "test:latest",
+        fromDigest: "sha256:aaaaaaaaaaaa1111",
+        toDigest: "sha256:bbbbbbbbbbbb2222",
+        at,
+        source: "schedule",
+      }),
+    });
+
+    // The update arrives before the new container's first line, and leads it.
+    test("puts the update at the top of the new container's lines", async () => {
+      const wrapper = createLogEventSource();
+      sources[sourceUrl].emitOpen();
+      sources[sourceUrl].emit("container-update", update("2019-06-12T10:55:40.000Z"));
+      sources[sourceUrl].emitMessage({
+        data: `{"ts":1560336942459, "m":"First line.", "id":1, "rm": "First line.", "c": "abc"}`,
+      });
+      await vi.advanceTimersByTimeAsync(300);
+
+      const marker = wrapper.findComponent(DeployLogItem);
+      expect(marker.exists()).toBe(true);
+      expect(marker.text()).toContain("aaaaaaaaaaaa");
+      expect(marker.text()).toContain("bbbbbbbbbbbb");
+      const html = wrapper.html();
+      expect(html.indexOf("bbbbbbbbbbbb")).toBeLessThan(html.indexOf("First line."));
+    });
+
+    // A container updated a day before the opening tail: placed above it, the
+    // marker would become the oldest row and send load-older back to the update.
+    test("waits while the window does not reach the update", async () => {
+      const wrapper = createLogEventSource();
+      sources[sourceUrl].emitOpen();
+      sources[sourceUrl].emit("container-update", update("2019-06-11T10:55:40.000Z"));
+      sources[sourceUrl].emitMessage({
+        data: `{"ts":1560336942459, "m":"First line.", "id":1, "rm": "First line.", "c": "abc"}`,
+      });
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(wrapper.findComponent(DeployLogItem).exists()).toBe(false);
+      expect(wrapper.html()).toContain("First line.");
+    });
+
+    test("a marker replayed by a reconnect is not added twice", async () => {
+      const wrapper = createLogEventSource();
+      sources[sourceUrl].emitOpen();
+      sources[sourceUrl].emit("container-update", update("2019-06-12T10:55:40.000Z"));
+      sources[sourceUrl].emit("container-update", update("2019-06-12T10:55:40.000Z"));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(wrapper.findAllComponents(DeployLogItem)).toHaveLength(1);
+    });
+  });
+
+  describe("update marker after a trim", () => {
+    const at = "2019-06-12T10:55:40.000Z";
+    const updatedAt = Date.parse(at);
+    const line = (id: number, ts: number) => ({ ts, m: `line ${id}`, id, rm: `line ${id}`, c: "abc" });
+    const deployEvent = {
+      ts: updatedAt * 1_000_000,
+      containerId: "abc",
+      type: "deploy",
+      suppressed: false,
+      deploy: { deployId: "d1", verdict: "clean" },
+    };
+    const { cloudConfig } = useCloudConfig();
+
+    // Answers Cloud's alert poll and the load of older lines.
+    const stubFetch = (events: unknown[]) =>
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => ({
+          ok: true,
+          json: async () => ({ hits: [], events: url.includes("events=1") ? events : [] }),
+          text: async () => JSON.stringify(line(1, updatedAt + 1000)),
+        })),
+      );
+
+    // Opens on the update, then runs well past its slack until the trim takes it.
+    async function trimMarkerAway() {
+      const wrapper = createLogEventSource();
+      sources[sourceUrl].emitOpen();
+      sources[sourceUrl].emit("container-update", {
+        data: JSON.stringify({ host: "localhost", name: "test", oldId: "old", newId: "abc", at, source: "schedule" }),
+      });
+      sources[sourceUrl].emitMessage({ data: JSON.stringify(line(2, updatedAt + 2000)) });
+      await vi.advanceTimersByTimeAsync(300);
+      // @ts-ignore
+      const rows = () => wrapper.vm.messages as LogEntry<string>[];
+      const markers = () => rows().filter((m) => m instanceof DeployLogEntry);
+      expect(markers()).toHaveLength(1);
+
+      let id = 2;
+      for (let batch = 0; batch < 4; batch++) {
+        for (let i = 0; i < 150; i++) {
+          id++;
+          sources[sourceUrl].emitMessage({ data: JSON.stringify(line(id, updatedAt + 600_000 + id)) });
+        }
+        await vi.advanceTimersByTimeAsync(1100);
+      }
+      expect(markers()).toHaveLength(0);
+
+      const loadOlder = async () => {
+        const head = rows()[0] as LoadMoreLogEntry;
+        expect(head).toBeInstanceOf(LoadMoreLogEntry);
+        const loading = head.loadMore();
+        await vi.advanceTimersByTimeAsync(100);
+        await loading;
+      };
+      return { wrapper, markers, loadOlder, rows };
+    }
+
+    afterEach(() => {
+      cloudConfig.value = null;
+      vi.unstubAllGlobals();
+    });
+
+    test("comes back when the lines around it reload", async () => {
+      stubFetch([]);
+      const { wrapper, markers, loadOlder, rows } = await trimMarkerAway();
+
+      await loadOlder();
+
+      expect(markers()).toHaveLength(1);
+      expect(rows()[1]).toBe(markers()[0]);
+      wrapper.unmount();
+    });
+
+    // Inside the slack the marker is older than every line left, so the top is its
+    // place in time, and it stays there when older lines load in under it.
+    test("trimmed within the slack holds the top, then sits above the reloaded lines", async () => {
+      stubFetch([]);
+      const wrapper = createLogEventSource();
+      sources[sourceUrl].emitOpen();
+      sources[sourceUrl].emit("container-update", {
+        data: JSON.stringify({ host: "localhost", name: "test", oldId: "old", newId: "abc", at, source: "schedule" }),
+      });
+      sources[sourceUrl].emitMessage({ data: JSON.stringify(line(2, updatedAt + 2000)) });
+      await vi.advanceTimersByTimeAsync(300);
+
+      // @ts-ignore
+      const rows = () => wrapper.vm.messages as LogEntry<string>[];
+      let id = 2;
+      for (let batch = 0; batch < 4; batch++) {
+        for (let i = 0; i < 150; i++) {
+          id++;
+          sources[sourceUrl].emitMessage({ data: JSON.stringify(line(id, updatedAt + 3000 + id)) });
+        }
+        await vi.advanceTimersByTimeAsync(1100);
+      }
+      expect(rows().filter((m) => m instanceof DeployLogEntry)).toHaveLength(1);
+      expect(rows()[1]).toBeInstanceOf(DeployLogEntry);
+      expect(rows()[2].message).not.toBe("line 2");
+
+      const loading = (rows()[0] as LoadMoreLogEntry).loadMore();
+      await vi.advanceTimersByTimeAsync(100);
+      await loading;
+
+      expect(rows().filter((m) => m instanceof DeployLogEntry)).toHaveLength(1);
+      expect(rows()[1]).toBeInstanceOf(DeployLogEntry);
+      expect(rows()[2].message).toBe("line 1");
+      wrapper.unmount();
+    });
+
+    test("is not drawn twice when Cloud knows the update and already judged it", async () => {
+      stubFetch([deployEvent]);
+      cloudConfig.value = { linked: true } as any;
+      const { wrapper, markers, loadOlder } = await trimMarkerAway();
+
+      await loadOlder();
+
+      expect(markers()).toHaveLength(1);
+      expect((markers()[0] as DeployLogEntry).verdict?.verdict).toBe("clean");
+      // A later poll, with the marker back on screen, must not add Cloud's copy either.
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(markers()).toHaveLength(1);
+      wrapper.unmount();
+    });
+
+    test("gives way to Cloud's copy when that reloads first", async () => {
+      stubFetch([deployEvent]);
+      const { wrapper, markers, loadOlder } = await trimMarkerAway();
+      // Linked only now, so no poll ever saw the marker while it was on screen.
+      cloudConfig.value = { linked: true } as any;
+
+      await loadOlder();
+
+      expect(markers()).toHaveLength(1);
+      wrapper.unmount();
+    });
+  });
+
+  describe("search status", () => {
+    test("shows no-logs when not searching and the stream is empty", async () => {
+      const wrapper = createLogEventSource();
+      sources[sourceUrl].emitOpen();
+
+      await vi.advanceTimersByTimeAsync(3500);
+      await nextTick();
+
+      expect(wrapper.find('[data-testid="no-logs"]').exists()).toBe(true);
+    });
+
+    test("suppresses no-logs while a search is still running", async () => {
+      const wrapper = createLogEventSource();
+      sources[sourceUrl].emitOpen();
+      sources[sourceUrl].emit("search-status", {
+        data: JSON.stringify({ scannedTo: "2026-06-01T14:31:00Z", matches: 0, done: false }),
+      });
+
+      vi.advanceTimersByTime(3000);
+      await nextTick();
+
+      expect(wrapper.find('[data-testid="no-logs"]').exists()).toBe(false);
+      expect(wrapper.findComponent(SearchStatus).exists()).toBe(true);
+    });
+  });
+
+  describe("render html correctly", () => {
+    test("should render messages", async () => {
+      const wrapper = createLogEventSource();
+      sources[sourceUrl].emitOpen();
+      sources[sourceUrl].emitMessage({
+        data: `{"ts":1560336942459, "m":"This is a message.", "id":1, "rm": "This is a message.", "c": "abc"}`,
+      });
+
+      vi.runAllTimers();
+      await nextTick();
+
+      expect(wrapper.find("ul[data-logs]").html()).toMatchSnapshot();
+    });
+
+    test("should render dates with 12 hour style", async () => {
+      const wrapper = createLogEventSource({ hourStyle: "12" });
+      sources[sourceUrl].emitOpen();
+      sources[sourceUrl].emitMessage({
+        data: `{"ts":1560336942459, "m":"foo bar", "id":1, "rm": "foo bar", "c": "abc"}`,
+      });
+
+      vi.runAllTimers();
+      await nextTick();
+
+      expect(wrapper.find("ul[data-logs]").html()).toMatchSnapshot();
+    });
+
+    test("should render dates with 24 hour style", async () => {
+      const wrapper = createLogEventSource({ hourStyle: "24" });
+      sources[sourceUrl].emitOpen();
+      sources[sourceUrl].emitMessage({
+        data: `{"ts":1560336942459, "m":"foo bar", "id":1, "c": "abc"}`,
+      });
+
+      vi.runAllTimers();
+      await nextTick();
+
+      expect(wrapper.find("ul[data-logs]").html()).toMatchSnapshot();
+    });
+  });
+});

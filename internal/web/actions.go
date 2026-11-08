@@ -1,36 +1,31 @@
 package web
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
+	"time"
 
+	"github.com/amir20/dozzle/internal/analytics"
 	"github.com/amir20/dozzle/internal/auth"
 	"github.com/amir20/dozzle/internal/container"
-	container_support "github.com/amir20/dozzle/internal/support/container"
-	support_web "github.com/amir20/dozzle/internal/support/web"
+	"github.com/amir20/dozzle/internal/hostservice"
+	"github.com/amir20/dozzle/internal/updatepolicy"
+	"github.com/amir20/dozzle/internal/web/sse"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 )
 
-func (h *handler) findContainerWithActions(w http.ResponseWriter, r *http.Request) (*container_support.ContainerService, bool) {
+func (h *handler) findContainerWithActions(w http.ResponseWriter, r *http.Request) (*container.ContainerService, bool) {
 	id := chi.URLParam(r, "id")
 
-	userLabels := h.config.Labels
-	permit := true
-	if h.config.Authorization.Provider != NONE {
-		user := auth.UserFromContext(r.Context())
-		if user.ContainerLabels.Exists() {
-			userLabels = user.ContainerLabels
-		}
-		permit = user.Roles.Has(auth.Actions)
-	}
-
-	if !permit {
-		log.Warn().Msg("user is not permitted to perform actions on container")
+	if !h.permitActions(r) {
 		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		return nil, false
 	}
 
-	containerService, err := h.hostService.FindContainer(hostKey(r), id, userLabels)
+	containerService, err := h.hostService.FindContainer(hostKey(r), id, h.resolveLabels(r))
 	if err != nil {
 		log.Error().Err(err).Msg("error while trying to find container")
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -38,6 +33,26 @@ func (h *handler) findContainerWithActions(w http.ResponseWriter, r *http.Reques
 	}
 
 	return containerService, true
+}
+
+// permitActions reports whether the caller holds the actions role. Without
+// login everyone does.
+func (h *handler) permitActions(r *http.Request) bool {
+	if h.config.Authorization.Provider == NONE || auth.UserFromContext(r.Context()).Roles.Has(auth.Actions) {
+		return true
+	}
+	log.Warn().Msg("user is not permitted to perform actions on container")
+	return false
+}
+
+// permitUpdate reports whether the caller may replace a container's image,
+// which takes the update role on top of actions.
+func (h *handler) permitUpdate(r *http.Request) bool {
+	if h.config.Authorization.Provider == NONE || auth.UserFromContext(r.Context()).Roles.Has(auth.Actions|auth.Update) {
+		return true
+	}
+	log.Warn().Msg("user is not permitted to update containers")
+	return false
 }
 
 func (h *handler) containerActions(w http.ResponseWriter, r *http.Request) {
@@ -61,34 +76,51 @@ func (h *handler) containerActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	analytics.Count("action." + string(parsedAction))
 	log.Info().Str("action", action).Str("container", containerService.Container.Name).Msg("container action performed")
 	http.Error(w, "", http.StatusNoContent)
 }
 
 func (h *handler) containerUpdate(w http.ResponseWriter, r *http.Request) {
+	if !h.permitUpdate(r) {
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return
+	}
 	containerService, ok := h.findContainerWithActions(w, r)
 	if !ok {
 		return
 	}
+	// A stopped container is never updated. The host refuses one too, but
+	// this answers before the progress stream opens.
+	if containerService.Container.State != "running" {
+		http.Error(w, container.ErrNotRunning.Error(), http.StatusConflict)
+		return
+	}
+	// ContainerService.Update refuses it too, but only once the stream is open.
+	if updatepolicy.CheckOnly(containerService.Container.Labels) {
+		http.Error(w, container.ErrCheckOnly.Error(), http.StatusForbidden)
+		return
+	}
+	analytics.Count("action.update")
 
-	sse, err := support_web.NewSSEWriter(r.Context(), w, r)
+	sseWriter, err := sse.NewWriter(r.Context(), w, r)
 	if err != nil {
 		log.Error().Err(err).Msg("error creating SSE writer")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer sse.Close()
+	defer sseWriter.Close()
 
 	progressCh := make(chan container.UpdateProgress, 50)
 	errCh := make(chan error, 1)
 
 	go func() {
-		_, err := containerService.Update(r.Context(), progressCh)
+		_, err := containerService.Update(r.Context(), container.UpdateSourceDozzle, progressCh)
 		errCh <- err
 	}()
 
 	for progress := range progressCh {
-		if err := sse.Event("update-progress", progress); err != nil {
+		if err := sseWriter.Event("update-progress", progress); err != nil {
 			log.Error().Err(err).Msg("error writing SSE event")
 			return
 		}
@@ -99,4 +131,148 @@ func (h *handler) containerUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Info().Str("container", containerService.Container.Name).Msg("container update completed")
+}
+
+// workloadRestarter is implemented by the k8s host service only.
+type workloadRestarter interface {
+	RolloutRestart(ctx context.Context, namespace, kind, name string, labels container.ContainerLabels) error
+}
+
+func (h *handler) rolloutRestart(w http.ResponseWriter, r *http.Request) {
+	if !h.permitActions(r) {
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return
+	}
+
+	restarter, ok := h.hostService.(workloadRestarter)
+	if !ok {
+		http.Error(w, "rollout restart is only supported in Kubernetes mode", http.StatusNotFound)
+		return
+	}
+
+	namespace, kind, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "kind"), chi.URLParam(r, "name")
+	err := restarter.RolloutRestart(r.Context(), namespace, kind, name, h.resolveLabels(r))
+	switch {
+	case errors.Is(err, hostservice.ErrWorkloadNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	case errors.Is(err, errors.ErrUnsupported):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	case err != nil:
+		log.Error().Err(err).Str("kind", kind).Str("name", name).Msg("error while trying to rollout restart")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	analytics.Count("action.rollout-restart")
+	http.Error(w, "", http.StatusNoContent)
+}
+
+// hostPruner is implemented by the docker host services (server and swarm), not k8s.
+type hostPruner interface {
+	PruneHost(ctx context.Context, host string, opts container.PruneOptions) (container.PruneResult, *container.Reclaimable, error)
+}
+
+// hostReclaimableLister is implemented by the same host services as hostPruner.
+type hostReclaimableLister interface {
+	ListReclaimable(ctx context.Context, host string) (container.ReclaimableItems, error)
+}
+
+// pruneTimeout bounds a prune detached from its request. Deleting hundreds of
+// images can take minutes, and a half-done prune because a tab closed is worse
+// than one that finishes unseen.
+const pruneTimeout = 10 * time.Minute
+
+type pruneResponse struct {
+	SpaceReclaimed uint64                 `json:"spaceReclaimed"`
+	Reclaimable    *container.Reclaimable `json:"reclaimable"`
+}
+
+func (h *handler) pruneHost(w http.ResponseWriter, r *http.Request) {
+	if !h.permitActions(r) {
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return
+	}
+	// A prune reaches stopped containers and volumes outside a label filter, so
+	// a user confined to some containers can't run one on the whole host.
+	if h.restrictedUser(r) {
+		http.Error(w, "your account only sees some containers, so it can't clean up the whole host", http.StatusForbidden)
+		return
+	}
+
+	pruner, ok := h.hostService.(hostPruner)
+	if !ok {
+		http.Error(w, "this mode has nothing to prune", http.StatusNotFound)
+		return
+	}
+
+	var opts container.PruneOptions
+	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil || !opts.Any() {
+		http.Error(w, "pick at least one of images, volumes, containers or buildCache", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), pruneTimeout)
+	defer cancel()
+	host := hostKey(r)
+	result, reclaimable, err := pruner.PruneHost(ctx, host, opts)
+	switch {
+	case errors.Is(err, hostservice.ErrHostNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	case errors.Is(err, errors.ErrUnsupported):
+		http.Error(w, err.Error(), http.StatusNotImplemented)
+		return
+	case err != nil:
+		log.Error().Err(err).Str("host", host).Msg("error while pruning host")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	analytics.Count("action.prune")
+	log.Info().Str("host", host).Interface("prune", opts).Uint64("freed", result.SpaceReclaimed).Msg("host pruned")
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(pruneResponse{SpaceReclaimed: result.SpaceReclaimed, Reclaimable: reclaimable}); err != nil {
+		log.Error().Err(err).Msg("error writing prune response")
+	}
+}
+
+// listReclaimable previews a prune: the images and volumes it would delete now.
+// It is gated like pruneHost, since the names describe the whole host.
+func (h *handler) listReclaimable(w http.ResponseWriter, r *http.Request) {
+	if !h.permitActions(r) {
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return
+	}
+	if h.restrictedUser(r) {
+		http.Error(w, "your account only sees some containers, so it can't clean up the whole host", http.StatusForbidden)
+		return
+	}
+
+	lister, ok := h.hostService.(hostReclaimableLister)
+	if !ok {
+		http.Error(w, "this mode has nothing to prune", http.StatusNotFound)
+		return
+	}
+
+	host := hostKey(r)
+	items, err := lister.ListReclaimable(r.Context(), host)
+	switch {
+	case errors.Is(err, hostservice.ErrHostNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	case errors.Is(err, errors.ErrUnsupported):
+		http.Error(w, err.Error(), http.StatusNotImplemented)
+		return
+	case err != nil:
+		log.Error().Err(err).Str("host", host).Msg("error while listing reclaimable items")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(items); err != nil {
+		log.Error().Err(err).Msg("error writing reclaimable items")
+	}
 }

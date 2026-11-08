@@ -1,0 +1,283 @@
+---
+title: Compatibilidad con Kubernetes
+description: Ejecuta Dozzle en Kubernetes para ver los logs de tus pods, con la configuración de RBAC, Metrics API y kubelet para estadísticas, reinicios, namespaces y filtros.
+sourceHash: b428ac778da5
+---
+
+# Compatibilidad con Kubernetes
+
+Dozzle funciona con Kubernetes y te permite ver los logs de tus pods.
+
+## <Icon icon="mdi:package-variant" inline /> Instalación con Helm
+
+La forma más rápida de ejecutar Dozzle en un clúster es el chart de Helm. Crea todo lo que crea la configuración manual de abajo y vincula el rol al namespace en el que lo instales.
+
+```bash
+helm install dozzle oci://ghcr.io/amir20/charts/dozzle --namespace dozzle --create-namespace
+```
+
+La versión del chart coincide con la de Dozzle. La configuración va en `env`, y los permisos adicionales para las acciones sobre contenedores y las estadísticas de red y disco se activan con `rbac.actions` y `rbac.nodeStats`:
+
+```yaml
+# values.yaml
+env:
+  - name: DOZZLE_ENABLE_ACTIONS
+    value: "true"
+rbac:
+  actions: true
+  nodeStats: true
+ingress:
+  enabled: true
+  hosts:
+    - host: dozzle.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+```
+
+Todas las opciones están en [`values.yaml`](https://github.com/amir20/dozzle/blob/main/charts/dozzle/values.yaml).
+
+## <Icon icon="mdi:kubernetes" inline /> Configuración de Kubernetes
+
+Para montar Dozzle en Kubernetes puedes usar la siguiente configuración YAML con `DOZZLE_MODE=k8s`. Incluye un deployment y un service para exponer Dozzle.
+
+```yaml
+# rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pod-viewer
+---
+# clusterrole.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pod-viewer-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+    verbs: ["get"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+# clusterrolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pod-viewer-binding
+subjects:
+  - kind: ServiceAccount
+    name: pod-viewer
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: pod-viewer-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# pvc.yaml
+# Con ReadWriteOnce y la estrategia Recreate, la configuración de cloud y las
+# reglas de notificación dejan de estar disponibles un momento durante los
+# despliegues (el pod nuevo no puede montar hasta que el viejo suelta el
+# volumen). Para que la configuración persista sin cortes, usa una storage
+# class ReadWriteMany (NFS, CephFS, etc.) y cambia la estrategia de abajo a
+# RollingUpdate.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dozzle-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dozzle
+spec:
+  selector:
+    matchLabels:
+      app: dozzle
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: dozzle
+    spec:
+      serviceAccountName: pod-viewer
+      containers:
+        - name: dozzle
+          image: amir20/dozzle:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DOZZLE_MODE
+              value: "k8s"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: dozzle-data
+---
+# service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: dozzle-service
+spec:
+  type: ClusterIP
+  selector:
+    app: dozzle
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+```
+
+Esta configuración crea una cuenta de servicio, un cluster role y un cluster role binding para que Dozzle pueda acceder a los recursos de Kubernetes que necesita. También crea un deployment para Dozzle y lo expone mediante un service.
+
+> [!WARNING]
+> Si despliegas esto con una herramienta de GitOps (como Flux CD o Argo CD) en un namespace distinto de `default`, acuérdate de cambiar el **namespace** en el **Subject del ClusterRoleBinding**
+
+El resto de funciones también están disponibles, incluidas la autenticación, los filtros y demás. Puedes usar las mismas variables de entorno que en Docker para configurar Dozzle en Kubernetes.
+
+> [!NOTE]
+> Dozzle en Kubernetes es una función nueva y puede tener algunas limitaciones frente a la versión de Docker. Usa esta [discusión](https://github.com/amir20/dozzle/discussions/3614) para informar de problemas o proponer mejoras.
+
+## <Icon icon="mdi:chart-line" inline /> API de métricas
+
+Dozzle se apoya en la [API de métricas de Kubernetes](https://github.com/kubernetes-sigs/metrics-server) para obtener el uso de recursos. La API se instala con este comando:
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+Para comprobar que la API está funcionando, ejecuta:
+
+```bash
+kubectl top pod
+```
+
+Sin ella, los logs siguen funcionando y la CPU y la memoria quedan vacías.
+
+La barra de memoria mide el uso frente al límite de memoria del contenedor. Un contenedor sin límite se mide frente a la memoria de su nodo, como hace Docker.
+
+## <Icon icon="mdi:harddisk" inline /> Red y disco
+
+La Metrics API no tiene datos de red ni de disco. Dozzle puede leerlos del kubelet de cada nodo (`/stats/summary`), el mismo sitio del que lee metrics-server. Es opcional: añade esta regla al ClusterRole y aparecerán las columnas de red y disco.
+
+```yaml
+- apiGroups: [""]
+  resources: ["nodes/stats"]
+  verbs: ["get"]
+```
+
+La red se cuenta por pod, así que el tráfico del pod aparece en el contenedor cuyo nombre va primero en orden alfabético y los demás contenedores no muestran ninguno. El disco es la capa escribible del contenedor más los PVC y volúmenes `emptyDir` que monta.
+
+Dozzle llama a cada kubelet directamente en la IP interna del nodo (puerto 10250), nunca a través del proxy de nodos del API server. Eso necesitaría `nodes/proxy`, que permite hacer exec en cualquier contenedor. El certificado del kubelet tiene que estar firmado por la CA del clúster, como ocurre en k3s. Donde los kubelets usan certificados autofirmados (lo predeterminado en kubeadm, kind), las columnas siguen ocultas y Dozzle registra el motivo una vez.
+
+## <Icon icon="mdi:restart" inline /> Acciones sobre contenedores
+
+Con `DOZZLE_ENABLE_ACTIONS=true`, Dozzle puede reiniciar un contenedor. Kubernetes no permite detener ni iniciar un contenedor por separado, así que reiniciar es la única acción. Dozzle reinicia borrando el pod para que su controlador (un Deployment, StatefulSet, DaemonSet o Job) cree uno nuevo, igual que `kubectl delete pod`. Un pod sin controlador nunca se borra.
+
+Borrar pods requiere un permiso que el rol de solo lectura de arriba no concede. Añade esta regla al ClusterRole:
+
+```yaml
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["delete"]
+```
+
+### Reinicio progresivo
+
+Reiniciar los pods de uno en uno no es la herramienta adecuada para un workload con varias réplicas. Un contenedor que pertenece a un Deployment, StatefulSet o DaemonSet también tiene la acción **Reiniciar Deployment** (o StatefulSet, o DaemonSet) en su menú, y la misma acción está en el menú de la vista combinada del workload en la barra lateral. Hace lo mismo que `kubectl rollout restart`: el controlador reemplaza todos los pods según la estrategia de despliegue del workload, así que se respeta `maxUnavailable`. Un pod con `imagePullPolicy: Always` vuelve a descargar su imagen en el proceso, que es como una etiqueta `:latest` obtiene una imagen nueva.
+
+Los Jobs, los CronJobs y los ReplicaSets sueltos no se pueden redesplegar, así que la acción no aparece para ellos. Como cualquier otra acción, solo llega a los workloads cuyos pods pasan los filtros de Dozzle.
+
+El redespliegue necesita permiso para hacer patch del workload. Añade esta regla al ClusterRole:
+
+```yaml
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets", "daemonsets"]
+  verbs: ["patch"]
+```
+
+## <Icon icon="mdi:filter-variant" inline /> Namespaces y filtros
+
+### Namespaces
+
+Por defecto, Dozzle monitoriza todos los namespaces del clúster. Si quieres limitarlo a uno concreto, define la variable de entorno `DOZZLE_NAMESPACE` con el nombre del namespace.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dozzle
+spec:
+  selector:
+    matchLabels:
+      app: dozzle
+  template:
+    metadata:
+      labels:
+        app: dozzle
+    spec:
+      serviceAccountName: pod-viewer
+      containers:
+        - name: dozzle
+          image: amir20/dozzle:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DOZZLE_MODE
+              value: "k8s"
+            - name: DOZZLE_NAMESPACE
+              value: "default"
+```
+
+> [!NOTE]
+> Dozzle admite varios namespaces: puedes poner en `DOZZLE_NAMESPACE` una lista separada por comas. Cuando se indican varios, Dozzle monitoriza cada namespace por separado y combina los resultados.
+
+### Etiquetas y filtros
+
+`DOZZLE_FILTER` funciona igual que los filtros de Docker. Puedes acotar el alcance de Dozzle con la variable de entorno `DOZZLE_FILTER`. Por ejemplo, para limitarlo a `env=prod`:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dozzle
+spec:
+  selector:
+    matchLabels:
+      app: dozzle
+  template:
+    metadata:
+      labels:
+        app: dozzle
+    spec:
+      serviceAccountName: pod-viewer
+      containers:
+        - name: dozzle
+          image: amir20/dozzle:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DOZZLE_MODE
+              value: "k8s"
+            - name: DOZZLE_FILTER
+              value: "env=prod"
+```

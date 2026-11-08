@@ -1,0 +1,335 @@
+---
+title: Alarme
+description: Richte in Dozzle Alarme für Docker-Container-Logs, CPU- und Speichermetriken sowie Lebenszyklus-Ereignisse ein und sende sie an einen Webhook, Slack, Discord oder ntfy.
+sourceHash: 5a3bc907b39a
+---
+
+# Alarme
+
+Dozzle kann Container-Logs, Ressourcenmetriken und Lebenszyklus-Ereignisse überwachen und dich benachrichtigen, sobald eine von dir beschriebene Bedingung zutrifft. Regeln werden als Ausdrücke geschrieben, auf deiner eigenen Instanz ausgewertet und an einen Webhook, an Slack, Discord oder ntfy zugestellt.
+
+Regeln liegen immer hier, auf der selbst gehosteten Instanz, weil dort deine Logs sind. Wenn du die Instanz mit [Dozzle Cloud](/de/guide/dozzle-cloud) verbunden hast, speisen dieselben Regeln auch Cloud, und die Zustellung (Bündelung, Zusammenfassungen, Stummschaltung, mobile Kanäle) konfigurierst du dort statt unten pro Ziel.
+
+## <Icon icon="mdi:format-list-bulleted-type" inline /> Alarmtypen
+
+Dozzle unterstützt drei Arten von Alarmen, die alle gleich auf der Seite **Benachrichtigungen** konfiguriert werden:
+
+| Typ                           | Löst aus bei                                     | Beispielhafter Anwendungsfall  |
+| ----------------------------- | ------------------------------------------------ | ------------------------------ |
+| [**Log**](#log-alerts)        | Einer Logmeldung, die auf ein Muster passt       | 5xx-Fehler, Stacktraces        |
+| [**Metrik**](#metric-alerts)  | CPU / Speicher überschreitet einen Schwellenwert | Container über 90 % CPU        |
+| [**Ereignis**](#event-alerts) | Lebenszyklus-Ereignissen von Docker              | OOM-Kills, ungesunde Container |
+
+Jeder Alarm kombiniert einen **Container-Ausdruck** (welche Container überwacht werden) mit einem **Auslöse-Ausdruck** (die Bedingung, die den Alarm feuern lässt).
+
+> [!IMPORTANT]
+> Die Konfiguration von Alarmen und Zielen liegt im Verzeichnis `/data`. Du musst dieses Verzeichnis als Volume einhängen, damit deine Benachrichtigungseinstellungen Neustarts des Containers überleben.
+
+::: code-group
+
+```sh
+docker run -v /var/run/docker.sock:/var/run/docker.sock -v /path/to/data:/data -p 8080:8080 amir20/dozzle:latest
+```
+
+```yaml [docker-compose.yml]
+services:
+  dozzle:
+    image: amir20/dozzle:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /path/to/data:/data
+    ports:
+      - 8080:8080
+```
+
+:::
+
+## <Icon icon="mdi:send-outline" inline /> Ein Ziel einrichten
+
+Bevor du Alarme anlegst, musst du mindestens ein Benachrichtigungsziel konfigurieren. Geh in Dozzle auf die Seite **Benachrichtigungen** und klicke auf **Ziel hinzufügen**.
+
+### Webhook
+
+Webhooks schicken eine HTTP-POST-Anfrage an eine URL deiner Wahl. Dozzle bringt fertige Payload-Templates für verbreitete Dienste mit:
+
+- **Slack** — formatiert mit Blocks und Markdown
+- **Discord** — formatiert für die Discord-Webhook-API
+- **ntfy** — formatiert für Push-Benachrichtigungen von [ntfy.sh](https://ntfy.sh)
+- **Custom** — generisches JSON-Payload, das du anpassen kannst
+
+Du kannst auch ein eigenes Payload-Template mit der `text/template`-Syntax von Go schreiben. Diese Variablen stehen zur Verfügung:
+
+<div v-pre>
+
+| Variable                  | Beschreibung                                  | Alarme   |
+| ------------------------- | --------------------------------------------- | -------- |
+| `{{.Detail}}`             | Zusammenfassung (Logmeldung oder Metrikwerte) | alle     |
+| `{{.Container.Name}}`     | Name des Containers                           | alle     |
+| `{{.Container.Image}}`    | Image des Containers                          | alle     |
+| `{{.Container.HostName}}` | Name des Docker-Hosts                         | alle     |
+| `{{.Container.State}}`    | Status des Containers                         | alle     |
+| `{{.Log.Message}}`        | Inhalt der Logmeldung                         | Log      |
+| `{{.Log.Level}}`          | Loglevel                                      | Log      |
+| `{{.Log.Timestamp}}`      | Zeitstempel des Logs                          | Log      |
+| `{{.Log.Stream}}`         | Art des Streams (stdout/stderr)               | Log      |
+| `{{.Stat.CPUPercent}}`    | CPU-Auslastung in Prozent                     | Metrik   |
+| `{{.Stat.MemoryPercent}}` | Speicherauslastung in Prozent                 | Metrik   |
+| `{{.Stat.MemoryUsage}}`   | Speicherverbrauch in Bytes                    | Metrik   |
+| `{{.Event.Name}}`         | Name des Ereignisses (Ereignis-Alarme)        | Ereignis |
+| `{{.Event.Attributes}}`   | Map der Ereignisattribute (Ereignis-Alarme)   | Ereignis |
+| `{{.Subscription.Name}}`  | Name der Alarmregel                           | alle     |
+| `{{.Timestamp}}`          | Erstellungszeitpunkt der Benachrichtigung     | alle     |
+
+`.Log`, `.Stat` und `.Event` sind nur bei der jeweils eigenen Alarmart gesetzt. Ein Ziel bekommt alle Arten, ein Template mit `{{.Log.Level}}` scheitert deshalb beim Senden von Metrik- und Ereignis-Alarmen, auch bei Update-Hinweisen. Schütze diese Felder mit `{{ with .Log }}{{ .Level }}{{ end }}` oder nutze `{{.Detail}}`, das jeder Alarm setzt. Der **Testen**-Button warnt, wenn das Template bei einer Alarmart scheitert, die er nicht gesendet hat.
+
+`{{.Timestamp}}` wird im Standard-Zeitformat von Go ausgegeben, das Dienste wie Discord ablehnen. Formatiere ihn stattdessen als ISO 8601:
+
+```json
+{
+  "embeds": [{ "timestamp": "{{ .Timestamp.UTC.Format `2006-01-02T15:04:05Z07:00` }}" }]
+}
+```
+
+</div>
+
+> [!TIP]
+> Nutze den Button **Test**, um deinen Webhook vor dem Speichern zu prüfen.
+
+#### Die URL aus der Datei heraushalten
+
+Webhook-URLs für Slack, Discord und ähnliche Dienste enthalten das Token. Um `notifications.yml` in der Versionsverwaltung zu halten, lege die URL in eine Umgebungsvariable und verweise mit `${VAR}` in der URL oder in einem beliebigen Header-Wert darauf. Das funktioniert genauso, wenn du es im Formular eingibst.
+
+```yaml
+dispatchers:
+  - id: 1
+    name: Slack
+    type: webhook
+    url: ${SLACK_WEBHOOK_URL}
+    headers:
+      Authorization: Bearer ${NTFY_TOKEN}
+```
+
+Dozzle speichert und zeigt den Platzhalter. Der Wert wird erst beim Senden einer Benachrichtigung gelesen, und zwar aus der Umgebung der Dozzle-Instanz, die sie sendet. Mit [Agents](/de/guide/agent) werden Alarme für die Container eines Agents von diesem Agent gesendet, setze die Variable also auch auf jedem Agent. Fehlt sie dort, schlägt das Senden mit `environment variable ... is not set` fehl.
+
+Nur die Form `${VAR}` wird ersetzt, ein einfaches `$VAR` bleibt unverändert. Variablen, die mit `DOZZLE_`, `AWS_`, `GOOGLE_`, `AZURE_`, `KUBERNETES_` oder `DOCKER_` beginnen, werden abgelehnt, denn wer einen Webhook bearbeiten darf, bestimmt auch, wohin er sendet. Jede andere Variable in der Umgebung von Dozzle lässt sich so auslesen, bewahre dort also keine fremden Geheimnisse auf.
+
+### Dozzle Cloud <CloudBadge />
+
+Verbundene Instanzen bekommen **Dozzle Cloud** automatisch als Ziel. Anders als ein reiner Webhook bündelt es wiederkehrende Fehler zu einer einzigen Benachrichtigung, fasst zusammen was passiert ist, und verteilt an E-Mail, Telegram, Discord, Slack, ntfy und Browser-Push, ohne dass du jeden Kanal hier einrichten musst. Siehe [Dozzle Cloud](/de/guide/dozzle-cloud).
+
+## <Icon icon="mdi:plus-circle-outline" inline /> Einen Alarm anlegen
+
+Geh auf die Seite **Benachrichtigungen** und klicke auf **Alarm hinzufügen**. Jeder Alarm hat einen **Container-Ausdruck** plus einen Auslöse-Ausdruck für **Log**, **Metrik** oder **Ereignis**.
+
+### Container-Ausdruck
+
+Der Container-Ausdruck wählt aus, welche Container überwacht werden. Verfügbare Eigenschaften:
+
+| Eigenschaft | Typ    | Beispiel                        |
+| ----------- | ------ | ------------------------------- |
+| `name`      | string | `name contains "api"`           |
+| `image`     | string | `image == "nginx:latest"`       |
+| `state`     | string | `state == "running"`            |
+| `health`    | string | `health == "unhealthy"`         |
+| `hostName`  | string | `hostName == "prod-host"`       |
+| `labels`    | map    | `labels["env"] == "production"` |
+
+Bedingungen kannst du mit `&&` (UND), `||` (ODER) und `!` (NICHT) kombinieren:
+
+```
+name contains "api" && labels["env"] == "production"
+```
+
+## <Icon icon="mdi:text-search" inline /> Log-Alarme
+
+### Log-Ausdruck
+
+Der Log-Ausdruck filtert, welche Logmeldungen den Alarm auslösen. Verfügbare Eigenschaften:
+
+| Eigenschaft | Typ        | Beispiel                   |
+| ----------- | ---------- | -------------------------- |
+| `message`   | string/map | `message contains "error"` |
+| `level`     | string     | `level == "error"`         |
+| `stream`    | string     | `stream == "stderr"`       |
+| `type`      | string     | `type == "complex"`        |
+
+Bei JSON-Logs kannst du über die Punktnotation auf verschachtelte Felder zugreifen:
+
+```
+message.status >= 500 && message.path contains "/api"
+```
+
+Zu den unterstützten String-Operatoren gehören `contains`, `startsWith`, `endsWith` und `matches` (Regex).
+
+### Log-Beispiele
+
+**Alarm bei allen Fehlern aus Produktionscontainern:**
+
+```
+Container: labels["env"] == "production"
+Log:       level == "error"
+```
+
+**Alarm bei HTTP-5xx-Fehlern aus API-Containern:**
+
+```
+Container: name contains "api"
+Log:       message.status >= 500
+```
+
+**Alarm bei jeder stderr-Ausgabe eines bestimmten Images:**
+
+```
+Container: image startsWith "myapp/"
+Log:       stream == "stderr"
+```
+
+**Alarm bei langsamen API-Antworten in der Produktion:**
+
+```
+Container: name contains "api" && labels["env"] == "production"
+Log:       message.duration > 5000 && message.path contains "/api"
+```
+
+**Alarm bei fehlgeschlagenen Anmeldungen per Regex:**
+
+```
+Container: name contains "auth" || name contains "gateway"
+Log:       message matches "(?i)(unauthorized|forbidden|invalid token)"
+```
+
+> [!NOTE]
+> Der Alarm-Editor bietet Autovervollständigung und prüft die Eingabe direkt. Du kannst vor dem Speichern eine Vorschau der passenden Container und Logs sehen.
+
+## <Icon icon="mdi:chart-line" inline /> Metrik-Alarme
+
+Metrik-Alarme feuern, wenn die CPU- oder Speicherauslastung eines Containers einen Schwellenwert überschreitet. Der Auslöse-Ausdruck wird gegen einen geglätteten Durchschnitt der Messwerte aus einem gleitenden Zeitfenster ausgewertet, was Fehlalarme durch kurze Spitzen verhindert.
+
+### Metrik-Ausdruck
+
+Verfügbare Eigenschaften:
+
+| Eigenschaft   | Typ    | Beschreibung                                             |
+| ------------- | ------ | -------------------------------------------------------- |
+| `cpu`         | number | CPU-Auslastung in Prozent (0–100), wie in der Oberfläche |
+| `memory`      | number | Speicherauslastung in Prozent (0–100)                    |
+| `memoryUsage` | number | Speicherverbrauch in Bytes                               |
+
+### Abklingzeit & Messfenster
+
+- **Messfenster** — wie viele Sekunden an Messwerten gemittelt werden, bevor der Ausdruck ausgewertet wird. Längere Fenster glätten Spitzen, kürzere reagieren schneller.
+- **Abklingzeit** — Mindestabstand in Sekunden zwischen zwei Auslösungen für denselben Container. Verhindert eine Flut von Alarmen, wenn ein Container dauerhaft über dem Schwellenwert liegt.
+
+### Metrik-Beispiele
+
+**Hohe CPU-Last bei Produktionscontainern:**
+
+```
+Container: labels["env"] == "production"
+Metric:    cpu > 90
+```
+
+**Speicherdruck bei einem bestimmten Dienst:**
+
+```
+Container: name contains "api"
+Metric:    memory > 85
+```
+
+**Absoluter Speicherverbrauch (1 GiB):**
+
+```
+Container: name == "postgres"
+Metric:    memoryUsage > 1073741824
+```
+
+## <Icon icon="mdi:bell-outline" inline /> Ereignis-Alarme
+
+Ereignis-Alarme feuern bei Lebenszyklus-Ereignissen von Docker-Containern. Praktisch, um Abstürze, OOM-Kills und Änderungen des Gesundheitszustands zu erkennen, ohne Logs zu parsen.
+
+### Ereignis-Ausdruck
+
+Verfügbare Eigenschaften:
+
+| Eigenschaft  | Typ    | Beschreibung                                                   |
+| ------------ | ------ | -------------------------------------------------------------- |
+| `name`       | string | Name des Ereignisses (siehe unten)                             |
+| `actorId`    | string | Docker-Actor-ID (normalerweise die Container-ID)               |
+| `attributes` | map    | Ereignisattribute von Docker (je nach Ereignistyp verschieden) |
+| `timestamp`  | time   | Zeitpunkt des Ereignisses                                      |
+
+Gängige Docker-Ereignisnamen sind `start`, `stop`, `die`, `kill`, `oom`, `restart`, `destroy` und `health_status`.
+
+Bei `health_status`-Ereignissen stellt Dozzle den aktuellen Zustand als `attributes["healthStatus"]` bereit (`healthy` oder `unhealthy`).
+
+### Update verfügbar
+
+Dozzle löst außerdem ein `update_available`-Ereignis aus, wenn für einen Container ein neueres Image veröffentlicht wird. Einmal am Tag, zu einer zufälligen Uhrzeit, prüft es jeden Container, der nicht mit `dev.dozzle.update: off` gelabelt ist, und alarmiert einmal pro neuem Image. Nach einem Neustart von Dozzle kann ein Alarm für ein bereits gemeldetes Update erneut kommen. Die Prüfung läuft nur, solange mindestens ein Ereignis-Alarm aktiviert ist, und gar nicht, wenn `--image-check-mode` auf `manual` oder `off` steht.
+
+| Attribut         | Beschreibung                               |
+| ---------------- | ------------------------------------------ |
+| `image`          | Image-Referenz, die der Container ausführt |
+| `currentVersion` | Version des laufenden Images               |
+| `latestVersion`  | Version des neueren Images                 |
+| `currentDigest`  | Digest des laufenden Images                |
+| `latestDigest`   | Digest des neueren Images                  |
+
+Die Versionen stammen aus dem Label `org.opencontainers.image.version` des Images. Viele Images setzen es nicht, daher kann jede der beiden Versionen leer sein. Außerdem liest Dozzle die neue Version nicht aus, wenn dein Pull-Limit bei Docker Hub knapp wird.
+
+### Ereignis-Beispiele
+
+**Alarm, wenn ein Produktionscontainer stirbt:**
+
+```
+Container: labels["env"] == "production"
+Event:     name == "die"
+```
+
+**Alarm bei OOM-Kills:**
+
+```
+Container: true
+Event:     name == "oom"
+```
+
+**Alarm, wenn ein Container ungesund wird:**
+
+```
+Container: true
+Event:     name == "health_status" && attributes["healthStatus"] == "unhealthy"
+```
+
+**Alarm, wenn ein neueres Image verfügbar ist:**
+
+```
+Container: true
+Event:     name == "update_available"
+```
+
+In einem Webhook-Template liegen die Versionen unter `.Event.Attributes`:
+
+<div v-pre>
+
+```
+New version for {{ .Container.Name }}: {{ .Event.Attributes.currentVersion }} -> {{ .Event.Attributes.latestVersion }}
+```
+
+</div>
+
+**Alarm bei unerwarteten Beendigungen (saubere und geordnete Shutdowns ausgenommen):**
+
+Die Exit-Codes 0 (Erfolg), 130 (SIGINT), 143 (SIGTERM) und 137 (SIGKILL) treten bei `docker stop`, Strg+C und Update-Zyklen auf und werden deshalb ausgeschlossen, um Rauschen zu vermeiden. Echte Fehler-Exits (1, 2, 125, ...) lösen weiterhin einen Alarm aus.
+
+```
+Container: name contains "worker"
+Event:     name == "die" && !(attributes["exitCode"] in ["0", "130", "143", "137"])
+```
+
+## <Icon icon="mdi:cog-outline" inline /> Alarme verwalten
+
+Auf der Seite Benachrichtigungen kannst du:
+
+- Alarme **aktivieren/deaktivieren**, ohne sie zu löschen
+- Ausdrücke und Ziele von Alarmen **bearbeiten**
+- **Statistiken ansehen**, darunter Anzahl der Auslösungen, passende Container und Zeitpunkt der letzten Auslösung
+- Nicht mehr benötigte Alarme **löschen**

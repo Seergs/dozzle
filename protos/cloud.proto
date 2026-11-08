@@ -23,6 +23,247 @@ service CloudToolService {
   // the log store, so they exist for anyone who linked cloud and configured a
   // subscription.
   rpc GetAlerts(GetAlertsRequest) returns (GetAlertsResponse);
+
+  // Dozzle-initiated unary call: what fired lately anywhere on this instance.
+  // GetAlerts answers "what fired inside this scroll window, for these
+  // containers", which is what the viewer needs and only the viewer needs.
+  // The notifications page and the container dot ask the opposite question and
+  // never know a container list up front. Scoped server-side to the
+  // (user_id, api_key_id) on the connection, like everything else here.
+  rpc GetRecentAlerts(GetRecentAlertsRequest) returns (GetAlertsResponse);
+
+  // Dozzle-initiated unary call: the container updates Cloud recorded lately on
+  // this instance, with its verdict on each, for the megaphone. Dozzle keeps
+  // its own updates only until a restart; this is what survives one. Scoped
+  // server-side to the (user_id, api_key_id) on the connection. Cloud has never
+  // heard of a Dozzle user, so Dozzle narrows the answer to what the viewer may
+  // see.
+  rpc GetRecentDeploys(GetRecentDeploysRequest) returns (GetRecentDeploysResponse);
+
+  // Dozzle-initiated unary call: what Cloud remembers about the error and
+  // warn lines on screen. Dozzle names each line by (container_id, log_id);
+  // Cloud finds the line in the logs it was streamed, groups it into its
+  // pattern, and answers from that container's pattern memory: new, louder
+  // than usual, or known. Needs the streamLogs opt-in (the lines must be in
+  // Cloud to be found). Scoped server-side to the (user_id, api_key_id) on the
+  // connection, like everything else here.
+  rpc GetPatternContext(GetPatternContextRequest) returns (GetPatternContextResponse);
+
+  // Dozzle-initiated unary call: the stats Cloud kept for one container.
+  //
+  // Dozzle holds a rolling 300 samples in the browser and nothing behind it, so
+  // "was it like this an hour ago" has no local answer. Cloud already receives
+  // these samples over StatsBatch; this reads them back. Scoped server-side to
+  // the (user_id, api_key_id) on the connection, like everything else here.
+  rpc GetContainerMetrics(GetContainerMetricsRequest) returns (GetContainerMetricsResponse);
+
+  // One assistant turn, opened by the Dozzle request that started it.
+  //
+  // Deliberately not served over ToolStream. That stream is owned by the
+  // process and has no user on it, so a tool call arriving there cannot be
+  // scoped to whoever asked. This stream is opened by the HTTP handler holding
+  // the browser's SSE response, so cloud sends the turn's tool calls back down
+  // it and Dozzle executes them inside that request, with that user's filter
+  // and roles. Cloud never learns who the user is.
+  rpc Chat(stream ChatClientEvent) returns (stream ChatServerEvent);
+}
+
+// ViewContext is what the user is looking at when they ask. The whole point of
+// asking from inside Dozzle is that nobody should have to name the thing
+// already on their screen.
+message ViewContext {
+  // Route shape: "container", "host", "merged", "stack", "index", …
+  string kind = 1;
+  // The route's own id or name, when it has one.
+  string target = 2;
+  repeated ViewContainer containers = 3;
+  repeated string hosts = 4;
+  // The active search term, empty when the user is not searching.
+  string search = 5;
+  // Levels the user narrowed to. Empty means every level, which is the default
+  // rather than a filter.
+  repeated string levels = 6;
+  // The moment currently in view, unix nanoseconds.
+  int64 visible_at_ns = 7;
+  // True on the historical view rather than the live stream.
+  bool historical = 8;
+  // The lines the user can actually see, oldest last. Sent so the assistant
+  // reads the same window the person is looking at instead of fetching its own
+  // and answering about a different slice of the log.
+  repeated ViewLogLine lines = 9;
+  // The one line the user pointed at, when they asked from a log row rather
+  // than from the composer.
+  ViewLogLine focused = 10;
+}
+
+// ViewLogLine is one line as Dozzle rendered it: already stripped of ANSI and
+// truncated, because this is what the user saw, not what the container wrote.
+message ViewLogLine {
+  int64 timestamp_ns = 1;
+  string level = 2;
+  // Set only on a view that merges several containers, where a line is
+  // ambiguous without it.
+  string container_id = 3;
+  string message = 4;
+}
+
+message ViewContainer {
+  string id = 1;
+  string name = 2;
+  string host = 3;
+}
+
+message ChatTurn {
+  string message = 1;
+  ViewContext view = 2;
+  // Opaque, per-instance reference to the local user, so cloud can keep five
+  // people's threads apart without learning who any of them are. Never a
+  // username: this is an HMAC under a secret that stays on this machine.
+  string user_ref = 3;
+}
+
+message ChatClientEvent {
+  oneof type {
+    ChatTurn turn = 1;
+    // Reuses the ToolStream message so the executor does not fork: same tool
+    // dispatch, different principal.
+    ToolResponse tool_result = 2;
+  }
+}
+
+message ChatServerEvent {
+  oneof type {
+    ChatStatus status = 1;
+    ChatDelta delta = 2;
+    ChatDone done = 3;
+    ChatError error = 4;
+    ToolRequest tool_call = 5;
+    ChatStep step = 6;
+  }
+}
+
+// ChatStep is one entry in the turn's progress trail: a tool call or a model
+// round. Each is sent when it starts and again, same id, when it finishes, so
+// the pane updates it in place. A build that predates it skips the event and
+// keeps showing ChatStatus, which cloud still sends.
+//
+// The pane picks its own words from tool and phase, in the reader's language;
+// label and summary are cloud's English, for a tool or phase it does not know.
+message ChatStep {
+  int32 id = 1;
+  // The tool's name as cloud calls it (search_logs, rpc_inspect_container, …).
+  // Empty for a model round.
+  string tool = 2;
+  // What a model round is doing: reading | reviewing | writing | retrying.
+  // Empty for a tool call.
+  string phase = 3;
+  string label = 4;
+  // What the call was about, from its arguments ("nginx · \"timeout\""). Data,
+  // not prose, so it is shown as it came.
+  string detail = 5;
+  ChatStepState state = 6;
+  // How many results the call returned; 0 is nothing found, -1 a result that
+  // is not a count.
+  int32 count = 7;
+  string summary = 8;
+  int64 duration_ms = 9;
+}
+
+enum ChatStepState {
+  CHAT_STEP_STATE_RUNNING = 0;
+  CHAT_STEP_STATE_DONE = 1;
+  CHAT_STEP_STATE_FAILED = 2;
+}
+
+// ChatStatus is what the assistant is doing right now ("reading logs"), shown
+// while nothing has been written yet.
+message ChatStatus {
+  string text = 1;
+}
+
+message ChatDelta {
+  string text = 1;
+  // Throw away everything shown so far and re-render from the deltas that
+  // follow. Happens on a model fallback, or when a round turned into a tool
+  // call. A flag rather than a sentinel in `text`, which a log line quoted back
+  // by the assistant could otherwise forge.
+  bool reset = 2;
+}
+
+message ChatDone {
+  // Cloud's id for the thread, so a reopened pane returns to it.
+  string session_id = 1;
+}
+
+message ChatError {
+  string message = 1;
+  // 'rate_limit' | 'not_configured' | '' — lets the pane render "you're out of
+  // questions today" as a notice rather than a failure.
+  string code = 2;
+}
+
+message GetRecentAlertsRequest {
+  // Oldest alert to return, unix nanoseconds. 0 lets cloud apply its own
+  // default window rather than making every caller agree on one.
+  int64 since_ts_ns = 1;
+  // Result cap. Default 50, server-capped at 200, matching GetAlerts.
+  int32 limit = 2;
+  // Narrow to the alerts one subscription raised, for the per-rule activity
+  // line on its card. Empty returns every subscription's.
+  string subscription_id = 3;
+  // Include anchors where an already-open incident was still firing. Default
+  // false keeps a long-running incident to a single row.
+  bool include_follow_ups = 4;
+}
+
+message GetRecentDeploysRequest {
+  // Oldest update to return, by when it finished, unix nanoseconds.
+  int64 since_ts_ns = 1;
+  // Result cap, newest first. Default 20, server-capped at 50.
+  int32 limit = 2;
+}
+
+message GetRecentDeploysResponse {
+  repeated RecentDeploy deploys = 1;
+}
+
+// One update as Cloud recorded it. update is the record Dozzle pushed (source
+// as Dozzle sent it), verdict what Cloud made of it since.
+message RecentDeploy {
+  ContainerUpdate update = 1;
+  DeployHit verdict = 2;
+}
+
+message GetContainerMetricsRequest {
+  // Name and host, not the container id: cloud stores these samples keyed by
+  // name so a redeploy continues the same line instead of stranding the old
+  // one. Dozzle resolves the id it was asked about to a name first, which is
+  // also where it checks the caller may see that container at all.
+  string container_name = 1;
+  string host_id = 5;
+  // The window to read, unix nanoseconds. An empty until means now.
+  int64 since_ts_ns = 2;
+  int64 until_ts_ns = 3;
+  // How many points to return. Cloud buckets the window down to this, because
+  // the panel draws a few hundred pixels wide and a day of samples is not.
+  int32 buckets = 4;
+}
+
+message ContainerMetricPoint {
+  int64 ts_ns = 1;
+  // Percent of the container's cores, the same normalisation Dozzle shows.
+  double cpu = 2;
+  // Percent of the container's memory limit.
+  double memory = 3;
+  // Absolute bytes, because a percentage of an unknown limit is not readable.
+  int64 memory_usage = 4;
+}
+
+message GetContainerMetricsResponse {
+  repeated ContainerMetricPoint points = 1;
+  // The bucket width cloud actually used, so the panel can say "1m averages"
+  // rather than implying every point is a sample.
+  int64 bucket_ns = 2;
 }
 
 message ToolRequest {
@@ -47,7 +288,84 @@ message ToolResponse {
     // request_id is empty for stats batches — like log batches, they are not
     // replies to a ToolRequest.
     StatsBatch stats_batch = 5;
+    // Unsolicited server-push: one container update Dozzle finished (or rolled
+    // back), so Cloud can watch what the new image does. request_id is empty.
+    ContainerUpdate container_update = 6;
+    // Unsolicited server-push: one container's configuration, when it starts
+    // and once per connection, so Cloud can keep a history of what changed.
+    // request_id is empty.
+    ContainerConfig container_config = 8;
   }
+  // 7 was image_snapshot, never sent.
+  reserved 7;
+  reserved "image_snapshot";
+}
+
+// One container's configuration as Docker reports it, pushed when the
+// container starts and for every running container when the connection opens.
+// Dozzle sends it again only when it changed, and Cloud keeps a row only when
+// it differs from the last one, so the history is the list of changes.
+//
+// Nothing that can hold a secret is sent. Environment variables never leave
+// Dozzle; label values and the command go only as HMACs keyed by a secret that
+// never leaves the machine, enough to say "this label changed" without the
+// value or a way to guess it. Image, ports, mounts (paths), limits,
+// restart policy and network mode carry no credentials.
+message ContainerConfig {
+  string host = 1;                      // host id the container runs on
+  string name = 2;                      // container name
+  string container_id = 3;
+  string image = 4;                     // image reference (repo:tag)
+  string command_hash = 5;              // HMAC-SHA256 of the command, hex
+  map<string, string> label_hashes = 6; // label key -> HMAC-SHA256 of its value, hex
+  uint64 memory_limit = 7;              // bytes, 0 for none
+  double cpu_limit = 8;                 // cores, 0 for none
+  repeated string ports = 9;
+  repeated string mounts = 10;          // "source:destination[:ro]"
+  string restart_policy = 11;
+  string network_mode = 12;
+  int64 started_at = 13;                // unix nanoseconds
+}
+
+// One container update, pushed by Dozzle after the swap commits or rolls
+// back. The identity of an update is the container it produced: Cloud keys it
+// on (host, name, new_container_id), so an update pushed again on a later
+// connection is recorded once. Digests are not part of the key: to_digest is
+// empty for a locally built image, and a repeat A→B after a rollback reuses
+// the same digest, yet each is a separate update with its own new container.
+//
+// A rolled-back swap is the one exception: it produced no lasting container,
+// and new_container_id is whatever runs the old version again — usually
+// old_container_id itself, which already keys the update that created it.
+// Cloud keys a rolled_back record on (host, name, old_container_id, at)
+// instead.
+//
+// Times are unix nanoseconds, like the other pushed batches.
+message ContainerUpdate {
+  string host = 1;                 // host id the container runs on
+  string name = 2;                 // container name; stable across the swap
+  string old_container_id = 3;     // the container that was replaced
+  string new_container_id = 4;     // the container that replaced it; when rolled_back, the one running the old version again (usually old_container_id)
+  string image_ref = 5;            // image reference (repo:tag); an update keeps it and moves what it resolves to
+  string from_digest = 7;          // repo digest before (sha256:…), empty for a locally built image
+  string to_digest = 8;            // repo digest after (sha256:…), empty for a locally built image
+  string from_image_id = 9;        // local image id before; the rollback target
+  string to_image_id = 10;         // local image id after
+  int64 old_started_at = 11;       // when the old container last started, unix nanoseconds; anchors Cloud's "previous startup" baseline
+  int64 at = 12;                   // when the update finished, unix nanoseconds
+  // Who started it: schedule | rollback, the only updates Dozzle sends. A
+  // rollback is the user undoing an earlier update: it creates a new
+  // container under the same name, keyed like any other update, and Cloud
+  // records it as the user's decision on the update it undoes rather than
+  // judging it as a new deploy.
+  string source = 13;
+  // True when Dozzle's own swap failed its stability check and restored the
+  // old container. Cloud records the verdict and needs no judge.
+  bool rolled_back = 16;
+  // 6 was to_ref, always the same as the ref. 14 was run_id, never set, and
+  // 15 consent, which was always "schedule".
+  reserved 6, 14, 15;
+  reserved "from_ref", "to_ref", "run_id", "consent";
 }
 
 // Batch of log lines from one or more containers. Dozzle pushes these
@@ -142,6 +460,11 @@ message ToolDefinition {
   // restart/etc.) must leave this false — the router will require the scope
   // argument and error if it's missing, so a write never fans out by mistake.
   bool read_only = 5;
+  // internal = true marks a tool for the cloud's own pipelines, never for a
+  // model: the cloud leaves it out of every LLM tool list. retro_scan reads a
+  // whole day of every container, which is not something a chat turn should
+  // be able to start.
+  bool internal = 6;
 }
 
 enum ToolScope {
@@ -151,7 +474,7 @@ enum ToolScope {
   // Applies to the whole Dozzle instance (list_hosts, notifications, etc.).
   // Requires instance_id in the args.
   TOOL_SCOPE_INSTANCE = 1;
-  // Targets a specific Docker host (deploy_compose, list_deploy_versions).
+  // Targets a specific Docker host.
   // Requires host_id in the args.
   TOOL_SCOPE_HOST = 2;
   // Targets a specific container (logs, actions, inspect). Requires
@@ -177,9 +500,14 @@ message CallToolResponse {
     ActionResult action = 6;
     FetchLogsResult fetch_logs = 7;
     InspectContainerResult inspect_container = 8;
-    DeployResult deploy = 11;
     NotificationResult notification = 12;
+    RetroScanResult retro_scan = 13;
+    InspectContainersResult inspect_containers = 14;
   }
+
+  // 11 was DeployResult deploy, removed with the native compose deploy feature.
+  reserved 11;
+  reserved "deploy";
 }
 
 message CancelStreamRequest {
@@ -216,6 +544,20 @@ message ContainerInfo {
   string host_name = 10;
   string host_id = 12;
   string group = 11;
+  // Set only by check_image_updates; every other listing leaves it empty.
+  ImageUpdate image_update = 13;
+}
+
+// Whether the registry serves a newer image than the one a container runs.
+message ImageUpdate {
+  // up-to-date, update-available, pinned, not-checkable, auth-required,
+  // skipped or unknown (imagecheck.Status).
+  string status = 1;
+  string local_digest = 2;
+  string remote_digest = 3;
+  string reason = 4;
+  // Unix seconds. A cached answer can be hours old; refresh re-asks.
+  int64 checked_at = 5;
 }
 
 message ListContainersResult {
@@ -278,6 +620,80 @@ message InspectContainerResult {
   repeated string mounts = 16;
   string restart_policy = 17;
   string network_mode = 18;
+  int32 restart_count = 20;
+  bool oom_killed = 21;
+  int32 exit_code = 22;
+  // The same mounts as `mounts`, in order, with whether each is writable.
+  // `mounts` keeps its "source:destination (type)" strings for older readers.
+  // Empty from a Dozzle that predates this field.
+  repeated ContainerMount mount_details = 23;
+  // The most recent healthcheck runs, oldest first, read live from the
+  // engine. Empty when the container has no healthcheck, the host cannot read
+  // them (k8s, an older agent), or the read failed.
+  repeated HealthProbe health_log = 24;
+}
+
+// One healthcheck run from Docker's State.Health.Log. output is clipped.
+message HealthProbe {
+  string start = 1;
+  string end = 2;
+  int32 exit_code = 3;
+  string output = 4;
+}
+
+// inspect_containers: inspect_container for every visible container in one
+// call, for the cloud's own pipelines. One round trip instead of one per
+// container, which is what a slow link to the cloud makes expensive.
+message InspectContainersResult {
+  repeated InspectContainerResult containers = 1;
+  // The deadline ended the pass; containers it never reached are left out.
+  bool deadline_exceeded = 2;
+  // The byte cap was hit; the containers past it are left out.
+  bool truncated = 3;
+}
+
+message ContainerMount {
+  string source = 1;
+  string destination = 2;
+  string type = 3;
+  bool rw = 4;
+}
+
+// retro_scan: one pass over every visible container's logs since a point in
+// time, for the cloud's first look at a newly linked instance. Each container
+// is read once, all requested levels at once, so counts are true counts rather
+// than the 100-line floors fetch_container_logs gives.
+message RetroScanResult {
+  repeated RetroScanContainer containers = 1;
+  // The total byte cap was hit: some containers kept their counts but lost
+  // lines (lines_truncated says which).
+  bool truncated = 2;
+  // The deadline ended the scan; containers it never reached have
+  // scanned = false.
+  bool deadline_exceeded = 3;
+}
+
+message RetroScanContainer {
+  string id = 1;
+  string name = 2;
+  string host_id = 3;
+  string state = 4;
+  // RFC3339 span actually read: from the requested start, or the container's
+  // start if later, to now or to when it stopped.
+  string from = 5;
+  string to = 6;
+  bool scanned = 7;
+  // Set when the logs could not be read at all (a syslog, gelf, fluentd or none
+  // log driver). Not a scan failure.
+  string error = 8;
+  // True counts per requested level.
+  map<string, int64> level_counts = 9;
+  // The newest matching lines, oldest first, under the per-container byte cap.
+  repeated LogEntry lines = 10;
+  bool lines_truncated = 11;
+  int32 restart_count = 12;
+  bool oom_killed = 13;
+  int32 exit_code = 14;
 }
 
 // Container action result
@@ -286,13 +702,6 @@ message ActionResult {
   string container_id = 2;
   string action = 3;
   string message = 4;
-}
-
-// Deploy compose result
-message DeployResult {
-  bool success = 1;
-  string project = 2;
-  string message = 3;
 }
 
 // Notification/alert tool result (list, create).
@@ -316,6 +725,13 @@ message SearchLogsRequest {
   string host_id = 4;
   // Optional filter — narrow to a specific container.
   string container_id = 5;
+  // Also return how the matches spread over the window (volume, step_ns).
+  // Set on the first page only: the shape of the window does not change as
+  // the reader pages back through it.
+  bool include_volume = 6;
+  // The query was typed into Dozzle's in-log find, which runs every query as a
+  // regex. Cloud decides how to run it, so changing that needs no Dozzle release.
+  bool regex = 7;
 }
 
 message SearchLogsResponse {
@@ -323,6 +739,23 @@ message SearchLogsResponse {
   bool has_more = 2;
   // For pagination: pass back as before_ts_ns to fetch the next page.
   int64 next_before_ts_ns = 3;
+  // Match counts per (bucket, level) over the whole search window, oldest
+  // first, empty pairs omitted. Only when include_volume was set; empty if
+  // the aggregation failed, which never fails the search itself.
+  repeated SearchVolumeBucket volume = 4;
+  // Bucket width in nanoseconds; 0 when volume is absent.
+  int64 step_ns = 5;
+  // The oldest moment this search can reach: the search window or the plan's
+  // retention, whichever is shorter. Cloud decides it; 0 from an older Cloud.
+  int64 window_start_ns = 6;
+  // Every match in the window. Unset when Cloud could not count it in time.
+  optional int64 total = 7;
+}
+
+message SearchVolumeBucket {
+  int64 timestamp_ns = 1;
+  string level = 2;
+  int64 count = 3;
 }
 
 message SearchLogHit {
@@ -415,6 +848,10 @@ message AlertHit {
   // Deep link to the alert page in Dozzle Cloud, built from the API key's
   // app_url. Empty when the key has no app_url configured.
   string url = 15;
+  // The subscription that raised this alert, so the notifications page can put
+  // activity on the rule that caused it rather than only in a flat list.
+  // Empty for alerts cloud raised without a Dozzle-side rule behind them.
+  string subscription_id = 18;
 }
 
 // One matched event — a notification Dozzle raised because it matched a
@@ -443,6 +880,89 @@ message EventHit {
   // lifecycle description for a container event. The only renderable text a
   // metric or event notification has, since neither carries a log line.
   string detail = 10;
+  // Set only when type is 'deploy': an image update Dozzle Cloud judged.
+  // container_id is then the container the update created (the 12-character
+  // new_container_id of the ContainerUpdate), and ts_ns when the update
+  // finished. alert_id is empty and suppressed is false.
+  DeployHit deploy = 11;
+}
+
+// What Dozzle Cloud made of one container update, for the update marker in
+// the log stream.
+message DeployHit {
+  // Opaque, sqids-encoded, like AlertHit.alert_id.
+  string deploy_id = 1;
+  // The container name the update was recorded under.
+  string container = 2;
+  // The refs and bare sha256: digests the update moved between. Either digest
+  // is empty for an image built locally.
+  string from_ref = 3;
+  string to_ref = 4;
+  string from_digest = 5;
+  string to_digest = 6;
+  // 'pending' | 'clean' | 'regressed' | 'unsure' | 'rolled_back_by_dozzle'.
+  // 'pending' means the judge has not answered yet.
+  string verdict = 7;
+  // One short sentence on why, for the marker. Empty while pending.
+  string reason = 8;
+  // 'rolled_back' | 'kept' | '': what the person decided on a regression.
+  string decision = 9;
+  // Deep link to the update in Dozzle Cloud. Empty when there is nothing to
+  // open there.
+  string url = 10;
+}
+
+// One log line the viewer is showing, named the way Cloud stored it.
+message PatternLineRef {
+  string container_id = 1;
+  // The FNV-32a line hash Dozzle stamps on every streamed line (LogEvent.id).
+  uint32 log_id = 2;
+}
+
+message GetPatternContextRequest {
+  // Error and warn lines currently shown. Server-capped at 500.
+  repeated PatternLineRef lines = 1;
+  // Window the lines fall in, so Cloud searches only that slice of the store.
+  int64 from_ts_ns = 2;
+  int64 to_ts_ns = 3;
+}
+
+enum PatternStatus {
+  // Seen before at a normal rate. Nothing to say.
+  PATTERN_STATUS_KNOWN = 0;
+  // Never seen on this container before the last day.
+  PATTERN_STATUS_NEW = 1;
+  // Seen before, but at several times its usual hourly rate right now.
+  PATTERN_STATUS_LOUDER = 2;
+  // Memory for this container is too young or has gaps: NEW can't be trusted
+  // yet, so nothing should be shown.
+  PATTERN_STATUS_LEARNING = 3;
+}
+
+// What Cloud remembers about one pattern, and which of the asked lines are it.
+message PatternContext {
+  string container_id = 1;
+  repeated uint32 log_ids = 2;
+  // The collapsed pattern, e.g. "connection refused to <IP4>:<N>". For the
+  // tooltip and for building a filter; never matched against lines by Dozzle.
+  string pattern = 3;
+  string level = 4;
+  PatternStatus status = 5;
+  // Log time of the first line of this pattern Cloud has seen; 0 if never.
+  int64 first_seen_ns = 6;
+  int32 days_seen = 7;
+  // Lines of this pattern in the last hour.
+  double rate_per_hour = 8;
+  // Mean lines per hour over the hours it appeared in.
+  double usual_rate_per_hour = 9;
+  // Reserved for the update the pattern first appeared after.
+  reserved 10;
+  // Reserved for signals pooled across accounts.
+  reserved 20 to 29;
+}
+
+message GetPatternContextResponse {
+  repeated PatternContext patterns = 1;
 }
 
 message GetAlertsResponse {

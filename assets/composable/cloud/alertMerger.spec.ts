@@ -1,0 +1,482 @@
+/**
+ * @vitest-environment jsdom
+ */
+import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
+import { computed, effectScope, shallowRef, ref, type Ref } from "vue";
+import { useAlertMerger, isStreamLog } from "./alertMerger";
+import type { CloudAlert } from "./cloudAlerts";
+import {
+  AlertLogEntry,
+  CloudEventLogEntry,
+  DeployLogEntry,
+  LoadMoreLogEntry,
+  SimpleLogEntry,
+  SkippedLogsEntry,
+  type LogEntry,
+  type LogMessage,
+} from "@/models/LogEntry";
+import type { Container } from "@/models/Container";
+import { loadBetween } from "@/composable/logs/loadBetween";
+import { useLogLoader } from "@/composable/logs/logLoader";
+
+vi.mock("@/composable/logs/loadBetween", () => ({ loadBetween: vi.fn() }));
+
+// Reactive so tests can flip the instance between linked and unlinked, which is
+// what drives the poll and the boot-race decoration.
+type CloudLink = { linked: boolean };
+const holder = vi.hoisted(() => ({ cloudConfig: null as ReturnType<typeof import("vue").ref<CloudLink>> | null }));
+vi.mock("./cloudConfig", async () => {
+  const { ref: vueRef } = await import("vue");
+  holder.cloudConfig = vueRef<CloudLink>({ linked: true });
+  return { useCloudConfig: () => ({ cloudConfig: holder.cloudConfig }) };
+});
+const setLinked = (linked: boolean) => (holder.cloudConfig!.value = { linked });
+
+const ns = (n: number) => n * 1_000_000;
+
+function log(id: number, at: number): LogEntry<LogMessage> {
+  return new SimpleLogEntry(`line ${id}`, "abc", id, new Date(at), "info", "stdout", `line ${id}`);
+}
+
+function alert(overrides: Partial<CloudAlert> = {}): CloudAlert {
+  return {
+    alertId: "a1",
+    containerId: "abc",
+    hostId: "h",
+    ts: ns(100),
+    headline: "Pool exhausted",
+    level: "error",
+    eventCount: 3,
+    createdAt: ns(100),
+    isOrigin: true,
+    ...overrides,
+  };
+}
+
+const shapeOf = (entries: LogEntry<LogMessage>[]) =>
+  entries.map((e) => {
+    if (e instanceof LoadMoreLogEntry) return "loader";
+    if (e instanceof AlertLogEntry) return `alert:${e.alert.alertId}`;
+    return `log:${e.id}`;
+  });
+
+function withMerger(
+  messages: ReturnType<typeof shallowRef<LogEntry<LogMessage>[]>>,
+  fn: (merger: ReturnType<typeof useAlertMerger>, containers: Ref<Container[]>) => Promise<void>,
+  anchor?: Date,
+) {
+  const scope = effectScope();
+  // A computed, like the real one: a single-container view rebuilds
+  // `[container]` on every re-evaluation, so the ref's identity churns while
+  // the stream it describes does not.
+  const source = shallowRef<string[]>(["abc"]);
+  const containers = computed(() => source.value.map((id) => ({ id }) as unknown as Container));
+  const params = ref(new URLSearchParams());
+  const merger = scope.run(() => useAlertMerger(messages as any, containers, params, () => anchor))!;
+  return fn(merger, source as unknown as Ref<Container[]>).finally(() => scope.stop());
+}
+
+/** The from/to the last fetch asked for, in milliseconds. */
+function lastWindow() {
+  const url = new URL((global.fetch as any).mock.lastCall[0], "http://localhost");
+  return {
+    from: Number(url.searchParams.get("from")) / 1_000_000,
+    to: Number(url.searchParams.get("to")) / 1_000_000,
+  };
+}
+
+function respondWith(hits: CloudAlert[]) {
+  global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ hits }) });
+}
+
+describe("isStreamLog", () => {
+  test("accepts log lines and rejects the synthetic rows", () => {
+    expect(isStreamLog(log(1, 100))).toBe(true);
+    expect(isStreamLog(new LoadMoreLogEntry(new Date(), async () => {}))).toBe(false);
+    expect(isStreamLog(new AlertLogEntry(alert(), new Date(100)))).toBe(false);
+    expect(isStreamLog(new CloudEventLogEntry({ ts: ns(1), containerId: "abc", suppressed: true }, new Date(1)))).toBe(
+      false,
+    );
+    expect(
+      isStreamLog(
+        new DeployLogEntry({ host: "h", name: "app", oldId: "o", newId: "abc", at: "", source: "" }, new Date(1)),
+      ),
+    ).toBe(false);
+    expect(isStreamLog(new SkippedLogsEntry(new Date(), 1, log(1, 1) as any, log(2, 2) as any, async () => {}))).toBe(
+      false,
+    );
+  });
+});
+
+describe("useAlertMerger", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setLinked(true);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  test("withAlerts splices an alert after the line that triggered it", async () => {
+    respondWith([alert({ logId: 2, ts: ns(200) })]);
+    const messages = shallowRef<LogEntry<LogMessage>[]>([]);
+    await withMerger(messages, async ({ withAlerts }) => {
+      const merged = await withAlerts([log(1, 100), log(2, 200), log(3, 300)]);
+      expect(shapeOf(merged)).toEqual(["log:1", "log:2", "alert:a1", "log:3"]);
+    });
+  });
+
+  test("decorateVisible keeps load-more rows at both ends", async () => {
+    // A time-anchored alert older than every line on screen: without holding the
+    // loaders out of the merge it would sort ahead of the head one.
+    respondWith([alert({ ts: ns(50) })]);
+    const messages = shallowRef<LogEntry<LogMessage>[]>([
+      new LoadMoreLogEntry(new Date(), async () => {}),
+      log(1, 100),
+      log(2, 200),
+      new LoadMoreLogEntry(new Date(), async () => {}, false),
+    ]);
+
+    await withMerger(messages, async ({ decorateVisible }) => {
+      decorateVisible();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(shapeOf(messages.value)).toEqual(["loader", "alert:a1", "log:1", "log:2", "loader"]);
+    });
+  });
+
+  // A verdict lands without a new line, so a quiet container keeps asking for
+  // events while its update marker waits on one.
+  test("asks for events while an update marker waits on its verdict", async () => {
+    const now = Date.now();
+    const marker = new DeployLogEntry(
+      { host: "h", name: "app", oldId: "o", newId: "abc", at: new Date(now).toISOString(), source: "schedule" },
+      new Date(now),
+    );
+    const messages = shallowRef<LogEntry<LogMessage>[]>([marker, log(1, now + 10)]);
+    const deploy = (verdict: string) => ({
+      ts: ns(now),
+      containerId: "abc",
+      type: "deploy",
+      suppressed: false,
+      deploy: { deployId: "d1", verdict },
+    });
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ hits: [], events: [deploy("pending")] }) });
+
+    await withMerger(messages, async ({ decorateVisible }) => {
+      decorateVisible();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(marker.verdict?.verdict).toBe("pending");
+
+      global.fetch = vi
+        .fn()
+        .mockResolvedValue({ ok: true, json: async () => ({ hits: [], events: [deploy("clean")] }) });
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(new URL((global.fetch as any).mock.lastCall[0], "http://localhost").searchParams.get("events")).toBe("1");
+      expect(marker.verdict?.verdict).toBe("clean");
+      expect(messages.value.filter((m) => m instanceof DeployLogEntry)).toHaveLength(1);
+
+      // Settled: the next poll of an unchanged window leaves events out.
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(new URL((global.fetch as any).mock.lastCall[0], "http://localhost").searchParams.get("events")).toBeNull();
+    });
+  });
+
+  describe("after a trim", () => {
+    const metric = (at: number) => ({
+      ts: ns(at),
+      containerId: "abc",
+      type: "metric",
+      detail: "cpu",
+      suppressed: true,
+    });
+    const respondWithAll = (hits: CloudAlert[], events: unknown[]) => {
+      global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ hits, events }) });
+    };
+    const eventRows = (rows: LogEntry<LogMessage>[]) => rows.filter((r) => r instanceof CloudEventLogEntry);
+    const alertRows = (rows: LogEntry<LogMessage>[]) => rows.filter((r) => r instanceof AlertLogEntry);
+
+    test("draws a trimmed alert and event again when their lines reload", async () => {
+      const old = log(1, 100);
+      const hits = [alert({ logId: 1, ts: ns(100) })];
+      const events = [metric(50)];
+      respondWithAll(hits, events);
+      const messages = shallowRef<LogEntry<LogMessage>[]>([old, log(2, 200)]);
+
+      await withMerger(messages, async ({ decorateVisible, withAlerts, forgetTrimmed }) => {
+        decorateVisible();
+        await vi.advanceTimersByTimeAsync(500);
+        expect(eventRows(messages.value)).toHaveLength(1);
+        expect(alertRows(messages.value)).toHaveLength(1);
+
+        const cut = messages.value.findIndex((m) => m.id === 2);
+        forgetTrimmed(messages.value.slice(0, cut));
+        messages.value = messages.value.slice(cut);
+
+        const reloaded = await withAlerts([old]);
+        expect(eventRows(reloaded)).toHaveLength(1);
+        expect(alertRows(reloaded)).toHaveLength(1);
+      });
+    });
+
+    test("expanding skipped lines trims an alert that comes back with its line", async () => {
+      vi.mocked(loadBetween).mockReset();
+      const old = log(1, 100);
+      const hits = [alert({ logId: 1, ts: ns(100) })];
+      respondWithAll(hits, [metric(50)]);
+      const loader = new LoadMoreLogEntry(new Date(), async () => {});
+      const page = Array.from({ length: config.maxLogs }, (_, i) => log(1_000 + i, 1_000 + i));
+      const skipped = new SkippedLogsEntry(new Date(), page.length, page[0] as any, page.at(-1) as any, vi.fn());
+      const messages = shallowRef<LogEntry<LogMessage>[]>([loader, old, skipped]);
+      const scope = effectScope();
+      const containers = computed(() => [{ id: "abc", host: "h" } as unknown as Container]);
+      const { decorateWithAlerts, loadSkippedLogs, loadOlderLogs } = scope.run(() =>
+        useLogLoader(messages as any, containers, ref(new URLSearchParams()), ref(false)),
+      )!;
+
+      decorateWithAlerts();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(alertRows(messages.value)).toHaveLength(1);
+
+      vi.mocked(loadBetween).mockResolvedValueOnce({ logs: page, signal: new AbortController().signal });
+      await loadSkippedLogs(skipped);
+      expect(alertRows(messages.value)).toHaveLength(0);
+      expect(eventRows(messages.value)).toHaveLength(0);
+
+      vi.mocked(loadBetween).mockResolvedValueOnce({ logs: [old], signal: new AbortController().signal });
+      await loadOlderLogs(messages.value[0] as LoadMoreLogEntry);
+      expect(alertRows(messages.value)).toHaveLength(1);
+      expect(eventRows(messages.value)).toHaveLength(1);
+      scope.stop();
+    });
+
+    // A flush trims the window while the alerts are out, which replaces the load-more
+    // row, so the page is thrown away. Its alert has to survive for the next load.
+    test.each(["older", "skipped"])(
+      "a %s load thrown away mid-fetch leaves its alert to the next load",
+      async (kind) => {
+        vi.mocked(loadBetween).mockReset();
+        const old = log(1, 100);
+        const hits = [alert({ logId: 1, ts: ns(100) })];
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        global.fetch = vi.fn(async () => {
+          await gate;
+          return { ok: true, json: async () => ({ hits, events: [metric(50)] }) };
+        }) as any;
+
+        const loader = new LoadMoreLogEntry(new Date(), async () => {});
+        const skipped = new SkippedLogsEntry(new Date(), 1, old as any, old as any, vi.fn());
+        const later = log(2, 200);
+        const messages = shallowRef<LogEntry<LogMessage>[]>(
+          kind === "older" ? [loader, later] : [loader, skipped, later],
+        );
+        const scope = effectScope();
+        const containers = computed(() => [{ id: "abc", host: "h" } as unknown as Container]);
+        const { loadOlderLogs, loadSkippedLogs } = scope.run(() =>
+          useLogLoader(messages as any, containers, ref(new URLSearchParams()), ref(false)),
+        )!;
+        const resolved = { logs: [old], signal: new AbortController().signal };
+
+        vi.mocked(loadBetween).mockResolvedValueOnce(resolved);
+        const load = kind === "older" ? loadOlderLogs(loader) : loadSkippedLogs(skipped);
+        await vi.advanceTimersByTimeAsync(0);
+
+        const fresh = new LoadMoreLogEntry(new Date(), async () => {});
+        messages.value = [fresh, later];
+        release();
+        await load;
+        expect(shapeOf(messages.value)).toEqual(["loader", "log:2"]);
+
+        vi.mocked(loadBetween).mockResolvedValueOnce(resolved);
+        await loadOlderLogs(fresh);
+        expect(alertRows(messages.value)).toHaveLength(1);
+        expect(eventRows(messages.value)).toHaveLength(1);
+        scope.stop();
+      },
+    );
+
+    // Cloud event rows have no on-screen guard: the seen set is all that stops the
+    // next poll drawing one again, so a trim must leave the keys of what stayed.
+    test("does not draw a row that stayed on screen a second time", async () => {
+      const hits = [alert({ alertId: "kept", logId: 2, ts: ns(200) })];
+      respondWithAll(hits, [metric(50), metric(150)]);
+      const messages = shallowRef<LogEntry<LogMessage>[]>([log(1, 100), log(2, 200)]);
+
+      await withMerger(messages, async ({ decorateVisible, forgetTrimmed }) => {
+        decorateVisible();
+        await vi.advanceTimersByTimeAsync(500);
+        expect(eventRows(messages.value)).toHaveLength(2);
+
+        const cut = messages.value.findIndex((m) => m.id === 1) + 1;
+        forgetTrimmed(messages.value.slice(0, cut));
+        messages.value = [...messages.value.slice(cut), log(3, 300)];
+
+        // Only the row still on screen is inside the window Cloud is asked about.
+        respondWithAll(hits, [metric(150)]);
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(eventRows(messages.value)).toHaveLength(1);
+        expect(alertRows(messages.value)).toHaveLength(1);
+      });
+    });
+  });
+
+  test("polls the visible window so an alert can land while the view is open", async () => {
+    respondWith([]);
+    const messages = shallowRef<LogEntry<LogMessage>[]>([log(1, 100), log(2, 200)]);
+
+    await withMerger(messages, async ({ decorateVisible }) => {
+      decorateVisible();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(shapeOf(messages.value)).toEqual(["log:1", "log:2"]);
+
+      respondWith([alert({ logId: 1, ts: ns(100) })]);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(shapeOf(messages.value)).toEqual(["log:1", "alert:a1", "log:2"]);
+    });
+  });
+
+  // Every containers-changed event rebuilds the containers array, and the params
+  // computed rebuilds its URLSearchParams. Resetting the dedupe state on those
+  // meant the next poll drew every alert on screen a second time.
+  test("keeps its dedupe state when the container list is rebuilt with the same ids", async () => {
+    respondWith([alert({ logId: 1, ts: ns(100) })]);
+    const messages = shallowRef<LogEntry<LogMessage>[]>([log(1, 100), log(2, 200)]);
+
+    await withMerger(messages, async ({ decorateVisible }, source) => {
+      decorateVisible();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(shapeOf(messages.value)).toEqual(["log:1", "alert:a1", "log:2"]);
+
+      // Same stream, new array — what the store hands the view on any docker event.
+      (source as unknown as Ref<string[]>).value = ["abc"];
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(shapeOf(messages.value)).toEqual(["log:1", "alert:a1", "log:2"]);
+    });
+  });
+
+  // The last line of defence: even with the dedupe state gone, the run itself
+  // says what is already drawn.
+  test("does not draw an alert the run already holds", async () => {
+    respondWith([alert({ logId: 1, ts: ns(100) })]);
+    const messages = shallowRef<LogEntry<LogMessage>[]>([log(1, 100), log(2, 200)]);
+
+    await withMerger(messages, async ({ decorateVisible }, source) => {
+      decorateVisible();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(shapeOf(messages.value)).toEqual(["log:1", "alert:a1", "log:2"]);
+
+      // A real stream change wipes the dedupe state, but the block is still on screen.
+      (source as unknown as Ref<string[]>).value = ["abc", "def"];
+      (source as unknown as Ref<string[]>).value = ["abc"];
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(shapeOf(messages.value)).toEqual(["log:1", "alert:a1", "log:2"]);
+    });
+  });
+
+  test("widens the window to the anchor so a metric alert outside the loaded lines is found", async () => {
+    // A CPU spike at t=100 on a container whose only lines are minutes later.
+    // Without the anchor the window starts at the first line and cloud is never
+    // asked about the moment the view was opened on.
+    respondWith([alert({ ts: ns(100) })]);
+    const messages = shallowRef<LogEntry<LogMessage>[]>([]);
+    await withMerger(
+      messages,
+      async ({ withAlerts }) => {
+        const merged = await withAlerts([log(1, 5000), log(2, 6000)]);
+        expect(lastWindow().from).toBe(100);
+        expect(shapeOf(merged)).toEqual(["alert:a1", "log:1", "log:2"]);
+      },
+      new Date(100),
+    );
+  });
+
+  test("leaves the window alone when no anchor is given", async () => {
+    respondWith([]);
+    const messages = shallowRef<LogEntry<LogMessage>[]>([]);
+    await withMerger(messages, async ({ withAlerts }) => {
+      await withAlerts([log(1, 5000), log(2, 6000)]);
+      expect(lastWindow()).toEqual({ from: 5000, to: 6001 });
+    });
+  });
+
+  test("asks cloud for nothing while the instance is unlinked", async () => {
+    respondWith([alert({ logId: 1, ts: ns(100) })]);
+    setLinked(false);
+    const messages = shallowRef<LogEntry<LogMessage>[]>([log(1, 100), log(2, 200)]);
+
+    await withMerger(messages, async ({ decorateVisible }) => {
+      decorateVisible();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(shapeOf(messages.value)).toEqual(["log:1", "log:2"]);
+    });
+  });
+
+  test("decorates the open window as soon as cloud links", async () => {
+    // The boot race: cloudConfig is fetched asynchronously, so the first window
+    // is usually assembled before the instance looks linked.
+    respondWith([alert({ logId: 1, ts: ns(100) })]);
+    setLinked(false);
+    const messages = shallowRef<LogEntry<LogMessage>[]>([log(1, 100), log(2, 200)]);
+
+    await withMerger(messages, async () => {
+      await vi.advanceTimersByTimeAsync(500);
+      expect(shapeOf(messages.value)).toEqual(["log:1", "log:2"]);
+
+      setLinked(true);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(shapeOf(messages.value)).toEqual(["log:1", "alert:a1", "log:2"]);
+    });
+  });
+
+  test("drops a response whose window was replaced while it was in flight", async () => {
+    let release: (res: unknown) => void = () => {};
+    global.fetch = vi.fn().mockImplementation(() => new Promise((resolve) => (release = resolve)));
+    const messages = shallowRef<LogEntry<LogMessage>[]>([log(1, 100), log(2, 200)]);
+
+    await withMerger(messages, async ({ decorateVisible }) => {
+      decorateVisible();
+      await vi.advanceTimersByTimeAsync(500);
+
+      // Container switch (or a live flush) lands before cloud answers.
+      const replaced = [log(3, 300)];
+      messages.value = replaced;
+      release({ ok: true, json: async () => ({ hits: [alert({ logId: 1, ts: ns(100) })] }) });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(messages.value).toBe(replaced);
+
+      // And the dropped alert is not marked as placed, so the next pass draws it.
+      respondWith([alert({ logId: 1, ts: ns(100) })]);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(shapeOf(messages.value)).toEqual(["alert:a1", "log:3"]);
+    });
+  });
+
+  test("covers the whole time range when the newest line is not the last one", async () => {
+    // The historical view builds its opening window from two overlapping range
+    // queries, so the list can end on a line older than one in the middle.
+    respondWith([]);
+    const messages = shallowRef<LogEntry<LogMessage>[]>([]);
+    await withMerger(messages, async ({ withAlerts }) => {
+      await withAlerts([log(1, 100), log(2, 900), log(3, 300)]);
+      const url = new URL((global.fetch as any).mock.calls[0][0], "http://localhost");
+      expect(url.searchParams.get("from")).toBe(String(ns(100)));
+      expect(url.searchParams.get("to")).toBe(String(ns(901)));
+    });
+  });
+
+  test("does not place the same alert twice across overlapping windows", async () => {
+    respondWith([alert({ logId: 2, ts: ns(200) })]);
+    const messages = shallowRef<LogEntry<LogMessage>[]>([]);
+    await withMerger(messages, async ({ withAlerts }) => {
+      const first = await withAlerts([log(1, 100), log(2, 200)]);
+      expect(shapeOf(first)).toEqual(["log:1", "log:2", "alert:a1"]);
+      const second = await withAlerts([log(2, 200), log(3, 300)]);
+      expect(shapeOf(second)).toEqual(["log:2", "log:3"]);
+    });
+  });
+});

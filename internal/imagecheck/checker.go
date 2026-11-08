@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/amir20/dozzle/internal/updatepolicy"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 )
@@ -33,6 +34,14 @@ func ParseMode(input string) (Mode, error) {
 	}
 }
 
+// Allows reports whether a check may contact a registry. explicit means a
+// person asked for this check, rather than it running because a page opened.
+// It says nothing about the digest cache: an explicit check can still be
+// answered from it. The zero Mode allows nothing.
+func (m Mode) Allows(explicit bool) bool {
+	return m == ModeAutomatic || (m == ModeManual && explicit)
+}
+
 // Status is the outcome of an update check for a single container.
 type Status string
 
@@ -47,7 +56,8 @@ const (
 	StatusNotCheckable Status = "not-checkable"
 	// StatusAuthRequired means the registry refused an anonymous request.
 	StatusAuthRequired Status = "auth-required"
-	// StatusSkipped means the container opted out via label.
+	// StatusSkipped means updates are off for the container, by label or
+	// from the UI, so it is not checked.
 	StatusSkipped Status = "skipped"
 	StatusUnknown Status = "unknown"
 )
@@ -60,6 +70,14 @@ type Result struct {
 	RemoteDigest string    `json:"remoteDigest,omitempty"`
 	CheckedAt    time.Time `json:"checkedAt"`
 	Reason       string    `json:"reason,omitempty"`
+	// CurrentVersion and LatestVersion are what the running and the newer
+	// image declare in org.opencontainers.image.version. Set only when an
+	// update is available, and either may be empty.
+	CurrentVersion string `json:"currentVersion,omitempty"`
+	LatestVersion  string `json:"latestVersion,omitempty"`
+	// VersionReason says why an available update has no LatestVersion: one
+	// of the Version* constants.
+	VersionReason string `json:"versionReason,omitempty"`
 }
 
 // UpdateAvailable is a convenience for callers that only care about the alert.
@@ -67,18 +85,15 @@ func (r Result) UpdateAvailable() bool {
 	return r.Status == StatusUpdateAvailable
 }
 
-// SkipLabel lets an operator silence checks for a container they pin
-// deliberately, following the existing dev.dozzle.* label convention.
-const SkipLabel = "dev.dozzle.update-check"
+// SkipLabel is the older label that silenced checks for a container. It is
+// still read; dev.dozzle.update=off is the one to use. See updatepolicy.
+const SkipLabel = updatepolicy.LegacyCheckLabel
 
-// Skipped reports whether container labels opt out of update checks.
+// Skipped reports whether container labels set updates off for a container,
+// which also stops it being checked.
 func Skipped(labels map[string]string) bool {
-	switch labels[SkipLabel] {
-	case "false", "off", "no":
-		return true
-	default:
-		return false
-	}
+	p, ok := updatepolicy.FromLabels(labels)
+	return ok && p == updatepolicy.Off
 }
 
 type digestEntry struct {
@@ -112,6 +127,8 @@ type Checker struct {
 
 	mu    sync.Mutex
 	cache map[string]digestEntry
+	// versions maps an image digest to the version it declares.
+	versions map[string]versionEntry
 }
 
 func NewChecker(registry *Registry, ttl time.Duration) *Checker {
@@ -119,6 +136,7 @@ func NewChecker(registry *Registry, ttl time.Duration) *Checker {
 		registry: registry,
 		ttl:      ttl,
 		cache:    make(map[string]digestEntry),
+		versions: make(map[string]versionEntry),
 	}
 }
 
@@ -262,7 +280,10 @@ func (c *Checker) remoteDigest(ctx context.Context, image string, ref Reference,
 		c.mu.Lock()
 		entry, ok := c.cache[image]
 		c.mu.Unlock()
-		if ok && time.Since(entry.fetchedAt) < entry.ttl {
+		// A refusal is kept for the full TTL, so it has to end early once the
+		// login it was refused for has changed.
+		stale := ok && errors.Is(entry.err, ErrAuthRequired) && configChangedSince(entry.fetchedAt)
+		if ok && !stale && time.Since(entry.fetchedAt) < entry.ttl {
 			log.Debug().
 				Str("image", image).
 				Str("digest", entry.digest).

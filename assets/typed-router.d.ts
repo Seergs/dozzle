@@ -94,6 +94,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/mcp/authorize': RouteRecordInfo<
+      '/mcp/authorize',
+      '/mcp/authorize',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/merged/[ids]': RouteRecordInfo<
       '/merged/[ids]',
       '/merged/:ids',
@@ -132,6 +139,69 @@ declare module 'vue-router/auto-routes' {
     '/settings': RouteRecordInfo<
       '/settings',
       '/settings',
+      Record<never, never>,
+      Record<never, never>,
+      | '/settings/about'
+      | '/settings/cloud'
+      | '/settings/general'
+      | '/settings/hosts'
+      | '/settings/logs'
+      | '/settings/security'
+      | '/settings/sidebar'
+      | '/settings/updates'
+    >,
+    '/settings/about': RouteRecordInfo<
+      '/settings/about',
+      '/settings/about',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/settings/cloud': RouteRecordInfo<
+      '/settings/cloud',
+      '/settings/cloud',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/settings/general': RouteRecordInfo<
+      '/settings/general',
+      '/settings/general',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/settings/hosts': RouteRecordInfo<
+      '/settings/hosts',
+      '/settings/hosts',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/settings/logs': RouteRecordInfo<
+      '/settings/logs',
+      '/settings/logs',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/settings/security': RouteRecordInfo<
+      '/settings/security',
+      '/settings/security',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/settings/sidebar': RouteRecordInfo<
+      '/settings/sidebar',
+      '/settings/sidebar',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/settings/updates': RouteRecordInfo<
+      '/settings/updates',
+      '/settings/updates',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -236,6 +306,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
+    'assets/pages/mcp/authorize.vue': {
+      routes:
+        | '/mcp/authorize'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
     'assets/pages/merged/[ids].vue': {
       routes:
         | '/merged/[ids]'
@@ -279,6 +357,78 @@ declare module 'vue-router/auto-routes' {
     'assets/pages/settings.vue': {
       routes:
         | '/settings'
+        | '/settings/about'
+        | '/settings/cloud'
+        | '/settings/general'
+        | '/settings/hosts'
+        | '/settings/logs'
+        | '/settings/security'
+        | '/settings/sidebar'
+        | '/settings/updates'
+      views:
+        | 'default'
+      pathParamNames:
+        | never
+    }
+    'assets/pages/settings/about.vue': {
+      routes:
+        | '/settings/about'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'assets/pages/settings/cloud.vue': {
+      routes:
+        | '/settings/cloud'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'assets/pages/settings/general.vue': {
+      routes:
+        | '/settings/general'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'assets/pages/settings/hosts.vue': {
+      routes:
+        | '/settings/hosts'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'assets/pages/settings/logs.vue': {
+      routes:
+        | '/settings/logs'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'assets/pages/settings/security.vue': {
+      routes:
+        | '/settings/security'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'assets/pages/settings/sidebar.vue': {
+      routes:
+        | '/settings/sidebar'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'assets/pages/settings/updates.vue': {
+      routes:
+        | '/settings/updates'
       views:
         | never
       pathParamNames:

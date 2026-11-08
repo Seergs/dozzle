@@ -1,0 +1,456 @@
+import { useCloudConfig } from "./cloudConfig";
+import { AlertLogEntry, CloudEventLogEntry, DeployLogEntry, LogEntry, type LogMessage } from "@/models/LogEntry";
+import type { ContainerUpdate, DeployVerdict } from "@/models/ContainerUpdate";
+
+/**
+ * One alert anchored inside a scroll window, as returned by
+ * /api/cloud/alerts. Mirrors cloud.AlertHit on the Go side.
+ */
+export interface CloudAlert {
+  /** Opaque, sqids-encoded. Never a raw row id. */
+  alertId: string;
+  containerId: string;
+  hostId: string;
+  /**
+   * Dozzle's FNV-32a hash of the line that triggered the alert — the same id
+   * LogEntry.id carries. Absent for metric and event alerts, which have no
+   * triggering line and are positioned by `ts` alone.
+   */
+  logId?: number;
+  /** Anchor time, unix nanoseconds. */
+  ts: number;
+  headline: string;
+  level: string;
+  eventCount: number;
+  suppressedCount?: number;
+  /** > 1 means the incident is wider than the container being viewed. */
+  containerCount?: number;
+  /** The alert's description, shown in Details. Present even when triage
+   *  wrote no investigation. */
+  summary?: string;
+  investigation?: string;
+  triageAction?: string;
+  createdAt: number;
+  lastActivityAt?: number;
+  /**
+   * True where the incident FIRST fired. Cloud appends every folded batch's
+   * events to the original alert, so one incident can have activity in many
+   * windows; follow-up anchors render as a compact marker rather than a card.
+   */
+  isOrigin: boolean;
+  url?: string;
+  /** The rule that raised this alert, so activity can be shown on the card
+   *  that caused it. Empty for alerts cloud raised with no local rule. */
+  subscriptionId?: string;
+}
+
+/** One matched event, as returned by /api/cloud/alerts?events=1. */
+export interface CloudEvent {
+  ts: number;
+  logId?: number;
+  containerId: string;
+  hostId?: string;
+  level?: string;
+  message?: string;
+  /** log | metric | event, or deploy for Dozzle Cloud's verdict on an update. */
+  type?: string;
+  /** Human-readable summary; the only renderable text a non-log event has. */
+  detail?: string;
+  /** Opaque id of the alert this event reached, empty when it reached none. */
+  alertId?: string;
+  suppressed: boolean;
+  /**
+   * Set on a deploy event: the verdict on the update that created `containerId`,
+   * at `ts`. It goes on that update's marker, never on a row of its own.
+   */
+  deploy?: DeployVerdict;
+}
+
+interface CloudAlertsResponse {
+  hits: CloudAlert[];
+  events?: CloudEvent[];
+  truncated?: boolean;
+}
+
+/**
+ * fetchAlerts asks Cloud which alerts fired on these containers inside a
+ * window. Gated on `linked` only — NOT on streamLogs, which log search
+ * requires: alerts live in Cloud's database rather than the log store, so they
+ * exist for anyone who linked cloud and configured a subscription.
+ *
+ * Never throws. This rides the scroll path, where the log lines have already
+ * loaded and alerts are a decoration on top — a cloud outage must degrade to
+ * "no alerts", never to "no logs".
+ */
+export async function fetchAlerts(
+  containerIDs: string[],
+  from: Date,
+  to: Date,
+  {
+    linked,
+    signal,
+    followUps,
+    events,
+  }: { linked: boolean; signal?: AbortSignal; followUps?: boolean; events?: boolean },
+): Promise<{ alerts: CloudAlert[]; events: CloudEvent[] }> {
+  const empty = { alerts: [], events: [] };
+  // Backstop, not the primary gate — callers check availability before doing
+  // any of the work of assembling a window. Kept so a new caller that forgets
+  // cannot put traffic on an unlinked instance.
+  if (!linked || containerIDs.length === 0) return empty;
+
+  const params = new URLSearchParams({
+    containerIds: containerIDs.join(","),
+    from: String(from.getTime() * 1_000_000),
+    to: String(to.getTime() * 1_000_000),
+  });
+  if (followUps) params.set("followUps", "1");
+  if (events) params.set("events", "1");
+
+  try {
+    const res = await fetch(withBase(`/api/cloud/alerts?${params}`), { signal });
+    if (!res.ok) return empty;
+    const body = (await res.json()) as CloudAlertsResponse;
+    return { alerts: body.hits ?? [], events: body.events ?? [] };
+  } catch {
+    return empty;
+  }
+}
+
+/**
+ * useCloudAlerts exposes the fetch bound to the app's cloud-linked state, so
+ * callers don't each have to read the shared config.
+ */
+export function useCloudAlerts() {
+  const { cloudConfig } = useCloudConfig();
+  const available = computed(() => !!cloudConfig.value?.linked);
+
+  return {
+    available,
+    fetchAlerts: (
+      containerIDs: string[],
+      from: Date,
+      to: Date,
+      opts: { followUps?: boolean; events?: boolean; signal?: AbortSignal } = {},
+    ) => fetchAlerts(containerIDs, from, to, { linked: available.value, ...opts }),
+  };
+}
+
+/**
+ * mergeAlerts splices alerts into a time-sorted run of log entries.
+ *
+ * An alert whose trigger line is present lands immediately AFTER that line,
+ * matched on id — not by timestamp. Sorting alone is not enough: an alert
+ * shares a millisecond with the line that caused it, so a stable sort would
+ * place it either side by luck of input order, and the whole point is to show
+ * which line tripped the rule.
+ *
+ * Alerts with no matching line (metric alerts, or a trigger line outside the
+ * loaded range) fall back to timestamp position.
+ *
+ * `seen` carries anchor keys already placed by earlier loads, so overlapping
+ * scroll windows don't duplicate. It is mutated as alerts are placed.
+ */
+export function mergeAlerts(
+  logs: LogEntry<LogMessage>[],
+  alerts: CloudAlert[],
+  seen: Set<string>,
+): LogEntry<LogMessage>[] {
+  if (alerts.length === 0) return logs;
+
+  // Origins only. A follow-up anchor marks an incident that was already open,
+  // and the per-line badges say that with more precision — drawing a second
+  // block for it would claim a delivery that never happened.
+  //
+  // One block per incident. Cloud returns a hit per (alert, container) — an
+  // incident that spans containers is folded into one alert, headline and all,
+  // and then reported once for each container it touched, each anchored on
+  // that container's own line. A merged view asks about every container at
+  // once, so those hits arrive together, at slightly different timestamps, all
+  // of them origins. Keying on the alert alone is what collapses them; keying
+  // on the anchor drew the same incident once per container.
+  //
+  // Deduped inside the batch as well as against `seen`, because `seen` is read
+  // here, before anything in this batch has been placed.
+  //
+  // And deduped against the run itself. `seen` is the caller's memory of what
+  // it has drawn, and a caller that resets it — a container switch, a filter
+  // change, anything that rebuilds the view — hands us a run that already holds
+  // blocks this batch would place again. The list in front of us is the one
+  // authority on what is already drawn, so it wins over both sets.
+  const drawn = new Set<string>();
+  for (const l of logs) {
+    if (l instanceof AlertLogEntry) drawn.add(l.alert.alertId);
+  }
+
+  const fresh: CloudAlert[] = [];
+  const batch = new Set<string>();
+  for (const alert of alerts) {
+    if (!alert.isOrigin) continue;
+    const key = anchorKey(alert);
+    if (seen.has(key) || batch.has(key) || drawn.has(alert.alertId)) continue;
+    batch.add(key);
+    fresh.push(alert);
+  }
+  if (fresh.length === 0) return logs;
+
+  // Indexed once rather than scanned per alert: logs runs into the thousands
+  // after scrollback, so the nested `logs.some` this replaces was O(alerts x
+  // logs) on the main thread every time new alerts arrived.
+  const linesPresent = new Set<string>();
+  for (const l of logs) linesPresent.add(`${l.containerID}:${l.id}`);
+
+  const byLogId = new Map<number, CloudAlert[]>();
+  const byTime: CloudAlert[] = [];
+  for (const alert of fresh) {
+    // Only trust logId when that line is actually in this run; otherwise the
+    // alert would silently vanish rather than fall back to its timestamp.
+    if (alert.logId && linesPresent.has(`${alert.containerId}:${alert.logId}`)) {
+      const bucket = byLogId.get(alert.logId);
+      if (bucket) bucket.push(alert);
+      else byLogId.set(alert.logId, [alert]);
+    } else {
+      byTime.push(alert);
+    }
+  }
+
+  const place = (alert: CloudAlert) => {
+    seen.add(anchorKey(alert));
+    return new AlertLogEntry(alert, new Date(alert.ts / 1_000_000));
+  };
+
+  byTime.sort((a, b) => a.ts - b.ts);
+  const merged: LogEntry<LogMessage>[] = [];
+  let pending = 0;
+
+  for (const log of logs) {
+    // Timestamp-anchored alerts go in ahead of the first line at or past them.
+    while (pending < byTime.length && byTime[pending].ts / 1_000_000 <= log.date.getTime()) {
+      merged.push(place(byTime[pending++]));
+    }
+    merged.push(log);
+
+    const triggered = byLogId.get(log.id);
+    if (triggered) {
+      for (const alert of triggered) {
+        if (alert.containerId === log.containerID) merged.push(place(alert));
+      }
+      byLogId.delete(log.id);
+    }
+  }
+
+  while (pending < byTime.length) merged.push(place(byTime[pending++]));
+
+  return merged;
+}
+
+// Only origins are ever placed, and a follow-up anchor is never recorded, so
+// the alert id alone is enough to keep one incident to one block.
+function anchorKey(alert: CloudAlert): string {
+  return alert.alertId;
+}
+
+/**
+ * Marks the log lines Cloud reports an event on.
+ *
+ * Matching is by log id — the FNV-32a hash both sides stamp on the same raw
+ * line — so a line only gets badged when it really is the one that matched.
+ * Metric and event notifications carry no line and are skipped rather than
+ * guessed at by timestamp.
+ *
+ * Returns whether anything changed, so the caller can skip re-rendering the
+ * list when it did not.
+ */
+export function attachEvents(logs: LogEntry<LogMessage>[], events: CloudEvent[]): boolean {
+  if (events.length === 0) return false;
+
+  // Only suppressed log events are badged. One that produced an alert is
+  // already represented by the alert block, and a second marker on the same
+  // line would say the same thing twice.
+  const byLogId = new Map<number, CloudEvent>();
+  for (const e of events) {
+    if (e.logId && e.suppressed && isLogEvent(e)) byLogId.set(e.logId, e);
+  }
+  if (byLogId.size === 0) return false;
+
+  let changed = false;
+  for (const log of logs) {
+    if (log.matchedEvent) continue;
+    const event = byLogId.get(log.id);
+    if (!event || event.containerId !== log.containerID) continue;
+    log.matchedEvent = { suppressed: event.suppressed };
+    changed = true;
+  }
+  return changed;
+}
+
+/** A log event has a line in the stream; metric and container events do not. */
+function isLogEvent(event: CloudEvent): boolean {
+  return (event.type ?? "log") === "log";
+}
+
+/** A deploy event is Dozzle Cloud's verdict on an update, not a notification. */
+function isDeployEvent(event: CloudEvent): event is CloudEvent & { deploy: DeployVerdict } {
+  return event.type === "deploy" && !!event.deploy;
+}
+
+/**
+ * Splices metric and container events into the stream as their own rows.
+ *
+ * These have no log line to badge — they are the notification itself — so
+ * unlike log events they cannot be shown by marking something already on
+ * screen. Positioned by timestamp, since there is no id to anchor to.
+ *
+ * Events that produced an alert are skipped: the alert block already stands
+ * for them.
+ */
+export function mergeCloudEvents(
+  logs: LogEntry<LogMessage>[],
+  events: CloudEvent[],
+  seen: Set<string>,
+): LogEntry<LogMessage>[] {
+  // Deduped inside the batch as well as against `seen`, for the same reason
+  // mergeAlerts is: `seen` is read before anything in this batch is placed.
+  const fresh: CloudEvent[] = [];
+  const batch = new Set<string>();
+  for (const event of events) {
+    if (isLogEvent(event) || isDeployEvent(event) || !event.suppressed) continue;
+    const key = eventKey(event);
+    if (seen.has(key) || batch.has(key)) continue;
+    batch.add(key);
+    fresh.push(event);
+  }
+  if (fresh.length === 0) return logs;
+
+  fresh.sort((a, b) => a.ts - b.ts);
+  const merged: LogEntry<LogMessage>[] = [];
+  let pending = 0;
+
+  const place = (event: CloudEvent) => {
+    seen.add(eventKey(event));
+    return new CloudEventLogEntry(event, new Date(event.ts / 1_000_000));
+  };
+
+  for (const log of logs) {
+    while (pending < fresh.length && fresh[pending].ts / 1_000_000 <= log.date.getTime()) {
+      merged.push(place(fresh[pending++]));
+    }
+    merged.push(log);
+  }
+  while (pending < fresh.length) merged.push(place(fresh[pending++]));
+
+  return merged;
+}
+
+function eventKey(event: CloudEvent): string {
+  return `event:${event.containerId}:${event.ts}`;
+}
+
+/**
+ * Drops the keys of alert and event rows that have left the window, so they are
+ * drawn again when the lines around them reload. Only these two: an update marker
+ * keeps its key, because it comes back itself rather than as a new row from Cloud.
+ */
+export function forgetPlaced(rows: LogEntry<LogMessage>[], seen: Set<string>) {
+  for (const row of rows) {
+    if (row instanceof AlertLogEntry) seen.delete(anchorKey(row.alert));
+    else if (row instanceof CloudEventLogEntry) seen.delete(eventKey(row.event));
+  }
+}
+
+/**
+ * Puts Dozzle Cloud's verdicts on the update markers in a time-sorted run.
+ *
+ * A verdict is matched to its marker by container and finish time: a rollback
+ * leaves the old container running again, so one container can stand for two
+ * updates. Where no marker
+ * stands for the update (Dozzle no longer remembers it: an agent's host, or a
+ * restart since), Dozzle Cloud's record of it is spliced in by time instead.
+ *
+ * `seen` carries the updates already placed by earlier loads, like mergeAlerts.
+ * Returns the run, a new array when a marker was added, and whether a verdict on
+ * a marker already in it changed, which needs a re-render of its own.
+ */
+// Nanoseconds past 2^53 are not exact, so ts / 1e6 can land a hair under the
+// millisecond and Date truncates it to the one before. The marker key matches on
+// the exact millisecond, so round back to it.
+const deployDate = (ts: number) => new Date(Math.round(ts / 1_000_000));
+
+export function mergeDeploys(
+  logs: LogEntry<LogMessage>[],
+  events: CloudEvent[],
+  seen: Set<string>,
+): { logs: LogEntry<LogMessage>[]; changed: boolean } {
+  const deploys = events.filter(isDeployEvent);
+  if (deploys.length === 0) return { logs, changed: false };
+
+  const markers = new Map<string, DeployLogEntry>();
+  for (const l of logs) {
+    if (l instanceof DeployLogEntry) markers.set(l.updateKey, l);
+  }
+
+  let changed = false;
+  const fresh: DeployLogEntry[] = [];
+  for (const event of deploys) {
+    const key = deployKey(event.deploy);
+    const marker = markers.get(DeployLogEntry.key(event.containerId, deployDate(event.ts)));
+    if (marker) {
+      seen.add(key);
+      if (!sameVerdict(marker.verdict, event.deploy)) {
+        marker.verdict = event.deploy;
+        changed = true;
+      }
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const entry = new DeployLogEntry(updateFromCloud(event), deployDate(event.ts));
+    entry.verdict = event.deploy;
+    markers.set(entry.updateKey, entry);
+    fresh.push(entry);
+  }
+  if (fresh.length === 0) return { logs, changed };
+
+  fresh.sort((a, b) => a.date.getTime() - b.date.getTime());
+  const merged: LogEntry<LogMessage>[] = [];
+  let pending = 0;
+  for (const log of logs) {
+    while (pending < fresh.length && fresh[pending].date.getTime() <= log.date.getTime()) {
+      merged.push(fresh[pending++]);
+    }
+    merged.push(log);
+  }
+  while (pending < fresh.length) merged.push(fresh[pending++]);
+  return { logs: merged, changed };
+}
+
+function deployKey(deploy: DeployVerdict): string {
+  return `deploy:${deploy.deployId}`;
+}
+
+function sameVerdict(a: DeployVerdict | undefined, b: DeployVerdict): boolean {
+  return (
+    !!a &&
+    a.deployId === b.deployId &&
+    a.verdict === b.verdict &&
+    (a.reason ?? "") === (b.reason ?? "") &&
+    (a.decision ?? "") === (b.decision ?? "") &&
+    (a.url ?? "") === (b.url ?? "")
+  );
+}
+
+/** Dozzle Cloud's record of an update, in the shape Dozzle sends its own. */
+function updateFromCloud(event: CloudEvent & { deploy: DeployVerdict }): ContainerUpdate {
+  const d = event.deploy;
+  return {
+    host: event.hostId ?? "",
+    name: d.container ?? "",
+    oldId: "",
+    newId: event.containerId,
+    imageRef: d.toRef || d.fromRef,
+    fromDigest: d.fromDigest,
+    toDigest: d.toDigest,
+    at: new Date(event.ts / 1_000_000).toISOString(),
+    source: "",
+  };
+}

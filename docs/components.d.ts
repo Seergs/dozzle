@@ -12,8 +12,10 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     BuyMeCoffee: typeof import('./.vitepress/theme/components/BuyMeCoffee.vue')['default']
+    CloudBadge: typeof import('./.vitepress/theme/components/CloudBadge.vue')['default']
     Counter: typeof import('./.vitepress/theme/components/Counter.vue')['default']
     FinalCta: typeof import('./.vitepress/theme/components/FinalCta.vue')['default']
+    HeroAnnouncement: typeof import('./.vitepress/theme/components/HeroAnnouncement.vue')['default']
     HeroDemo: typeof import('./.vitepress/theme/components/HeroDemo.vue')['default']
     HeroTrust: typeof import('./.vitepress/theme/components/HeroTrust.vue')['default']
     InstallCommand: typeof import('./.vitepress/theme/components/InstallCommand.vue')['default']
@@ -23,6 +25,7 @@ declare module 'vue' {
     Stats: typeof import('./.vitepress/theme/components/Stats.vue')['default']
     Supported: typeof import('./.vitepress/theme/components/Supported.vue')['default']
     Testimonials: typeof import('./.vitepress/theme/components/Testimonials.vue')['default']
+    TourVideo: typeof import('./.vitepress/theme/components/TourVideo.vue')['default']
     WhyDozzle: typeof import('./.vitepress/theme/components/WhyDozzle.vue')['default']
   }
 }

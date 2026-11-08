@@ -1,0 +1,1033 @@
+package docker
+
+import (
+	"cmp"
+	"context"
+	"fmt"
+	"io"
+	"maps"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"encoding/json"
+
+	"github.com/amir20/dozzle/internal/container"
+	"github.com/amir20/dozzle/internal/container/docker/swap"
+	"github.com/amir20/dozzle/internal/imagecheck"
+	"github.com/amir20/dozzle/internal/selfupdate"
+	"github.com/amir20/dozzle/internal/utils"
+	docker "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
+
+	"github.com/rs/zerolog/log"
+)
+
+type CLI interface {
+	ContainerList(context.Context, client.ContainerListOptions) (client.ContainerListResult, error)
+	ContainerLogs(context.Context, string, client.ContainerLogsOptions) (client.ContainerLogsResult, error)
+	Events(context.Context, client.EventsListOptions) client.EventsResult
+	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error)
+	Ping(ctx context.Context, options client.PingOptions) (client.PingResult, error)
+	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
+	ContainerRestart(ctx context.Context, containerID string, options client.ContainerRestartOptions) (client.ContainerRestartResult, error)
+	ContainerAttach(ctx context.Context, containerID string, options client.ContainerAttachOptions) (client.ContainerAttachResult, error)
+	ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error)
+	ExecAttach(ctx context.Context, execID string, config client.ExecAttachOptions) (client.ExecAttachResult, error)
+	ExecResize(ctx context.Context, execID string, options client.ExecResizeOptions) (client.ExecResizeResult, error)
+	Info(ctx context.Context, options client.InfoOptions) (client.SystemInfoResult, error)
+	ServerVersion(ctx context.Context, options client.ServerVersionOptions) (client.ServerVersionResult, error)
+	ImagePull(ctx context.Context, refStr string, options client.ImagePullOptions) (client.ImagePullResponse, error)
+	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
+	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	ContainerRename(ctx context.Context, containerID string, options client.ContainerRenameOptions) (client.ContainerRenameResult, error)
+	ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error)
+	ServiceInspect(ctx context.Context, serviceID string, opts client.ServiceInspectOptions) (client.ServiceInspectResult, error)
+	ServiceList(ctx context.Context, options client.ServiceListOptions) (client.ServiceListResult, error)
+	ServiceUpdate(ctx context.Context, serviceID string, options client.ServiceUpdateOptions) (client.ServiceUpdateResult, error)
+	DiskUsage(ctx context.Context, options client.DiskUsageOptions) (client.DiskUsageResult, error)
+	ContainerPrune(ctx context.Context, opts client.ContainerPruneOptions) (client.ContainerPruneResult, error)
+	ImagePrune(ctx context.Context, opts client.ImagePruneOptions) (client.ImagePruneResult, error)
+	VolumePrune(ctx context.Context, options client.VolumePruneOptions) (client.VolumePruneResult, error)
+	BuildCachePrune(ctx context.Context, opts client.BuildCachePruneOptions) (client.BuildCachePruneResult, error)
+	NetworkInspect(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error)
+	VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error)
+}
+
+type Client struct {
+	cli           CLI
+	host          container.Host
+	info          system.Info
+	serviceLabels serviceLabelCache
+
+	// layerSizesCheap is false on a storage driver that sizes a layer by walking the
+	// container's whole filesystem; see layerSizesCheap.
+	layerSizesCheap bool
+
+	// hostMetrics is set only when the engine runs on the machine Dozzle can read
+	// /proc and statfs on. A local client pointed at DOCKER_HOST=tcp:// or ssh://
+	// is still typed "local", but its load and disk belong to another box.
+	hostMetrics bool
+
+	// Host-level metrics are read from /proc and statfs, and Host() is called on
+	// hot paths (stats log lines, every Hosts() fan-out), so the result is cached
+	// for a few seconds rather than re-read on every call.
+	metricsMu sync.Mutex
+	metrics   container.HostMetrics
+	metricsOK bool
+	metricsAt time.Time
+}
+
+// hostMetricsCacheTTL bounds how stale the host card's numbers can be, while
+// keeping the per-call cost off Host()'s hot paths.
+const hostMetricsCacheTTL = 5 * time.Second
+
+// readHostMetrics returns the local host's metrics, re-reading them at most once
+// per TTL. metricsOK reports whether the host /proc was readable; disk can be
+// present even when it was not, since it comes from the engine's data directory.
+func (d *Client) readHostMetrics() (container.HostMetrics, bool) {
+	d.metricsMu.Lock()
+	defer d.metricsMu.Unlock()
+
+	if !d.metricsAt.IsZero() && time.Since(d.metricsAt) < hostMetricsCacheTTL {
+		return d.metrics, d.metricsOK
+	}
+
+	m, ok := container.ReadHostMetrics(d.info.DockerRootDir, d.host.Runtime == "docker")
+	d.metrics, d.metricsOK, d.metricsAt = m, ok, time.Now()
+	return m, ok
+}
+
+// NewClient connects a Docker or Podman engine. hostIDs decides what this host
+// is called; see container.HostIDResolver for why that is not decided here.
+func NewClient(cli CLI, host container.Host, hostIDs container.HostIDResolver) *Client {
+	infoResult, err := cli.Info(context.Background(), client.InfoOptions{})
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get docker info")
+	}
+	info := infoResult.Info
+
+	runtime := detectRuntime(cli, info)
+
+	// Report what the engine said and let the resolver rule on it. host.ID is
+	// what the caller already knew: ParseConnection derives one from the remote
+	// URL, which is all that survives an engine we could not reach.
+	host.ID = hostIDs.Resolve(container.EngineIdentity{
+		Runtime:     runtime,
+		EngineID:    info.ID,
+		SwarmNodeID: info.Swarm.NodeID,
+		Hostname:    info.Name,
+		StorageRoot: info.DockerRootDir,
+		Fallback:    host.ID,
+	})
+
+	host.NCPU = info.NCPU
+	host.MemTotal = info.MemTotal
+	host.DockerVersion = info.ServerVersion
+	host.Runtime = runtime
+	host.Swarm = info.Swarm.NodeID != ""
+	if info.Swarm.Cluster != nil {
+		host.SwarmClusterID = info.Swarm.Cluster.ID
+	}
+
+	return &Client{
+		cli:             cli,
+		host:            host,
+		info:            info,
+		layerSizesCheap: layerSizesCheap(info),
+	}
+}
+
+// layerSizesCheap reports whether the daemon can size a writable layer by reading
+// only that layer. Every other driver diffs the container's whole filesystem against
+// its image, so one batch over every container walks every image on the host.
+// overlay is Podman's name for overlay2, and overlayfs the containerd snapshotter's.
+func layerSizesCheap(info system.Info) bool {
+	switch info.Driver {
+	case "overlay2":
+		// overlay2 falls back to the same full diff when the kernel cannot do a native one
+		for _, kv := range info.DriverStatus {
+			if kv[0] == "Native Overlay Diff" && kv[1] == "false" {
+				return false
+			}
+		}
+		return true
+	case "overlay", "overlayfs":
+		return true
+	default:
+		return false
+	}
+}
+
+// NewLocalClient creates a new instance of Client with docker filters.
+func NewLocalClient(hostname string, hostIDs container.HostIDResolver) (*Client, error) {
+	cli, err := client.New(client.FromEnv, client.WithUserAgent("Docker-Client/Dozzle"))
+
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := cli.Ping(context.Background(), client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+		return nil, fmt.Errorf("docker daemon unreachable or unsupported (minimum API version %s required): %w", client.MinAPIVersion, err)
+	}
+
+	infoResult, err := cli.Info(context.Background(), client.InfoOptions{})
+	if err != nil {
+		return nil, err
+	}
+	info := infoResult.Info
+
+	host := container.Host{
+		Name:     info.Name,
+		Endpoint: "local",
+		Type:     "local",
+	}
+
+	if hostname != "" {
+		host.Name = hostname
+	}
+
+	c := NewClient(cli, host, hostIDs)
+	c.hostMetrics = isLocalDaemon(cli.DaemonHost())
+	return c, nil
+}
+
+// isLocalDaemon reports whether the engine is reached over a local socket, which
+// is the only case where this machine's /proc and filesystem describe it.
+func isLocalDaemon(daemonHost string) bool {
+	return strings.HasPrefix(daemonHost, "unix://") || strings.HasPrefix(daemonHost, "npipe://")
+}
+
+func NewRemoteClient(host container.Host, hostIDs container.HostIDResolver) (*Client, error) {
+	if host.URL.Scheme != "tcp" {
+		return nil, fmt.Errorf("invalid scheme: %s", host.URL.Scheme)
+	}
+
+	opts := []client.Opt{
+		client.WithHost(host.URL.String()),
+	}
+
+	if host.ValidCerts {
+		log.Debug().Str("caCertPath", host.CACertPath).Str("certPath", host.CertPath).Str("keyPath", host.KeyPath).Msg("Using TLS for remote client")
+		opts = append(opts, client.WithTLSClientConfig(host.CACertPath, host.CertPath, host.KeyPath))
+	} else {
+		log.Debug().Msg("Not using TLS for remote client")
+	}
+
+	opts = append(opts, client.WithUserAgent("Docker-Client/Dozzle"))
+
+	cli, err := client.New(opts...)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := cli.Ping(context.Background(), client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+		return nil, fmt.Errorf("docker daemon unreachable or unsupported (minimum API version %s required): %w", client.MinAPIVersion, err)
+	}
+
+	host.Type = "remote"
+
+	return NewClient(cli, host, hostIDs), nil
+}
+
+func detectRuntime(cli CLI, info system.Info) string {
+	version, err := cli.ServerVersion(context.Background(), client.ServerVersionOptions{})
+	if err == nil {
+		for _, c := range version.Components {
+			if strings.Contains(strings.ToLower(c.Name), "podman") {
+				return "podman"
+			}
+		}
+		if strings.Contains(strings.ToLower(version.Platform.Name), "podman") {
+			return "podman"
+		}
+	}
+	if strings.Contains(strings.ToLower(info.OperatingSystem), "podman") {
+		return "podman"
+	}
+	return "docker"
+}
+
+// Finds a container by id, skipping the filters
+func (d *Client) FindContainer(ctx context.Context, id string) (container.Container, error) {
+	log.Debug().Str("id", id).Msg("Finding container")
+	if result, err := d.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{}); err == nil {
+		c := newContainerFromJSON(result.Container, d.host.ID)
+		d.mergeServiceLabels(ctx, &c)
+		return c, nil
+	} else {
+		return container.Container{}, err
+	}
+
+}
+
+func (d *Client) ContainerActions(ctx context.Context, action container.ContainerAction, containerID string) error {
+	switch action {
+	case container.Start:
+		_, err := d.cli.ContainerStart(ctx, containerID, client.ContainerStartOptions{})
+		return err
+	case container.Stop:
+		_, err := d.cli.ContainerStop(ctx, containerID, client.ContainerStopOptions{})
+		return err
+	case container.Restart:
+		_, err := d.cli.ContainerRestart(ctx, containerID, client.ContainerRestartOptions{})
+		return err
+	case container.Remove:
+		_, err := d.cli.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{})
+		return err
+	default:
+		return fmt.Errorf("unknown action: %s", action)
+	}
+}
+
+func (d *Client) ImagePull(ctx context.Context, imageName string) (io.ReadCloser, error) {
+	return d.cli.ImagePull(ctx, imageName, swap.PullOptions(imageName))
+}
+
+// ImageRepoDigests returns the "repo@sha256:..." digests recorded for a
+// locally available image. An image built locally has none, which is what
+// makes it impossible to check for updates. The repository is kept because an
+// image can carry digests for several repositories, and only the one being
+// checked is comparable.
+func (d *Client) ImageRepoDigests(ctx context.Context, imageID string) ([]string, error) {
+	result, err := d.cli.ImageInspect(ctx, imageID)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.RepoDigests, nil
+}
+
+// ImageID resolves an image reference to the local image ID it currently
+// points at.
+func (d *Client) ImageID(ctx context.Context, ref string) (string, error) {
+	result, err := d.cli.ImageInspect(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+
+	return result.ID, nil
+}
+
+// ImageInspect returns the local image ref resolves to.
+func (d *Client) ImageInspect(ctx context.Context, ref string) (image.InspectResponse, error) {
+	result, err := d.cli.ImageInspect(ctx, ref)
+	return result.InspectResponse, err
+}
+
+// SwapAPI is the engine client a container swap, and the image cleanup after
+// it, run against.
+func (d *Client) SwapAPI() swap.API {
+	return d.cli
+}
+
+func (d *Client) ContainerInspect(ctx context.Context, containerID string) (docker.InspectResponse, error) {
+	result, err := d.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
+	return result.Container, err
+}
+
+// the store type-asserts for it, so a changed signature would silently turn sizes off
+var _ container.SizeReader = (*Client)(nil)
+
+// ContainerSizes lists every container with its writable layer measured. The
+// daemon walks each layer to answer, so this is for the one batch at startup.
+func (d *Client) ContainerSizes(ctx context.Context) (map[string]int64, error) {
+	if !d.layerSizesCheap {
+		return nil, container.ErrLayerSizeUnsupported
+	}
+	list, err := d.cli.ContainerList(ctx, client.ContainerListOptions{All: true, Size: true})
+	if err != nil {
+		return nil, err
+	}
+	sizes := make(map[string]int64, len(list.Items))
+	for _, c := range list.Items {
+		// keyed like the store, by the short ID
+		sizes[c.ID[:12]] = c.SizeRw
+	}
+	return sizes, nil
+}
+
+// ContainerSize measures one container's writable layer.
+func (d *Client) ContainerSize(ctx context.Context, id string) (int64, error) {
+	if !d.layerSizesCheap {
+		return 0, container.ErrLayerSizeUnsupported
+	}
+	result, err := d.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{Size: true})
+	if err != nil {
+		return 0, err
+	}
+	if result.Container.SizeRw == nil {
+		return 0, fmt.Errorf("daemon did not report a size for %s", id)
+	}
+	return *result.Container.SizeRw, nil
+}
+
+// DiskUsage measures every volume, the same walk as `docker system df -v`, and
+// matches them to the containers that mount them. The match comes from a plain
+// list, since a stopped container that was never inspected has no mounts in the store.
+// Image sizes ride along: they are stored, so they add no walk. Containers are left
+// out, since that would walk every layer again. Build cache only comes along where
+// layers are cheap: BuildKit sizes a cache record it has not sized yet with the
+// driver's own diff, which on the other drivers is the same full walk.
+func (d *Client) DiskUsage(ctx context.Context) (container.DiskUsage, error) {
+	du, err := d.cli.DiskUsage(ctx, client.DiskUsageOptions{Volumes: true, Images: true, BuildCache: d.layerSizesCheap, Verbose: true})
+	if err != nil {
+		return container.DiskUsage{}, err
+	}
+	reclaimable := container.Reclaimable{
+		Images:         du.Images.TotalCount - du.Images.ActiveCount,
+		ImagesSize:     du.Images.Reclaimable,
+		BuildCacheSize: du.BuildCache.Reclaimable,
+	}
+	byName := make(map[string]container.VolumeUsage, len(du.Volumes.Items))
+	for _, v := range du.Volumes.Items {
+		// -1 is a driver that cannot say, such as most volume plugins
+		if v.UsageData == nil || v.UsageData.Size < 0 {
+			continue
+		}
+		byName[v.Name] = container.VolumeUsage{Name: v.Name, Size: v.UsageData.Size, Links: v.UsageData.RefCount}
+		if v.UsageData.RefCount == 0 {
+			reclaimable.Volumes++
+			reclaimable.VolumesSize += v.UsageData.Size
+		}
+	}
+
+	list, err := d.cli.ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return container.DiskUsage{}, err
+	}
+	volumes := make(map[string][]container.VolumeUsage)
+	for _, c := range list.Items {
+		for _, m := range c.Mounts {
+			v, ok := byName[m.Name]
+			if m.Type != mount.TypeVolume || !ok {
+				continue
+			}
+			v.Destination = m.Destination
+			volumes[c.ID[:12]] = append(volumes[c.ID[:12]], v)
+		}
+	}
+	return container.DiskUsage{Volumes: volumes, Reclaimable: reclaimable}, nil
+}
+
+// ListReclaimable names what Prune would delete for images and volumes, from
+// the same `docker system df -v` read DiskUsage makes, largest first.
+func (d *Client) ListReclaimable(ctx context.Context) (container.ReclaimableItems, error) {
+	du, err := d.cli.DiskUsage(ctx, client.DiskUsageOptions{Volumes: true, Images: true, Verbose: true})
+	if err != nil {
+		return container.ReclaimableItems{}, err
+	}
+	items := container.ReclaimableItems{
+		Images:  []container.ReclaimableImage{},
+		Volumes: []container.ReclaimableVolume{},
+	}
+	for _, img := range du.Images.Items {
+		if img.Containers != 0 {
+			continue
+		}
+		size := img.Size
+		// SharedSize is -1 when the daemon did not work it out
+		if img.SharedSize > 0 {
+			size -= img.SharedSize
+		}
+		tags := slices.DeleteFunc(append([]string{}, img.RepoTags...), func(t string) bool { return t == "<none>:<none>" })
+		items.Images = append(items.Images, container.ReclaimableImage{ID: img.ID, Tags: tags, Size: size})
+	}
+	for _, v := range du.Volumes.Items {
+		if v.UsageData == nil || v.UsageData.RefCount != 0 {
+			continue
+		}
+		created, _ := time.Parse(time.RFC3339, v.CreatedAt)
+		items.Volumes = append(items.Volumes, container.ReclaimableVolume{Name: v.Name, Size: v.UsageData.Size, Created: created})
+	}
+	slices.SortFunc(items.Images, func(a, b container.ReclaimableImage) int { return cmp.Compare(b.Size, a.Size) })
+	slices.SortFunc(items.Volumes, func(a, b container.ReclaimableVolume) int { return cmp.Compare(b.Size, a.Size) })
+	return items, nil
+}
+
+// Prune deletes the kinds opts picks. Containers go first, since a stopped
+// container holds on to its image and volumes, then images, volumes and build
+// cache. It stops at the first error and returns what was freed until then.
+func (d *Client) Prune(ctx context.Context, opts container.PruneOptions) (container.PruneResult, error) {
+	var result container.PruneResult
+	if opts.Containers {
+		// a container labelled dev.dozzle.keep=true is stopped on purpose
+		r, err := d.cli.ContainerPrune(ctx, client.ContainerPruneOptions{Filters: make(client.Filters).Add("label!", container.KeepLabel+"=true")})
+		if err != nil {
+			return result, fmt.Errorf("pruning containers: %w", err)
+		}
+		result.SpaceReclaimed += r.Report.SpaceReclaimed
+	}
+	if opts.Images {
+		// dangling=false is `-a`: every image no container uses, which is what
+		// Reclaimable counts, not only the untagged ones
+		r, err := d.cli.ImagePrune(ctx, client.ImagePruneOptions{Filters: make(client.Filters).Add("dangling", "false")})
+		if err != nil {
+			return result, fmt.Errorf("pruning images: %w", err)
+		}
+		result.SpaceReclaimed += r.Report.SpaceReclaimed
+	}
+	if opts.Volumes {
+		// All takes named volumes too. Without it only anonymous ones go, and the
+		// named volumes Reclaimable counts would stay.
+		r, err := d.cli.VolumePrune(ctx, client.VolumePruneOptions{All: true})
+		if err != nil {
+			return result, fmt.Errorf("pruning volumes: %w", err)
+		}
+		result.SpaceReclaimed += r.Report.SpaceReclaimed
+	}
+	if opts.BuildCache {
+		r, err := d.cli.BuildCachePrune(ctx, client.BuildCachePruneOptions{All: true})
+		if err != nil {
+			return result, fmt.Errorf("pruning build cache: %w", err)
+		}
+		result.SpaceReclaimed += r.Report.SpaceReclaimed
+	}
+	return result, nil
+}
+
+func (d *Client) ContainerRemove(ctx context.Context, containerID string) error {
+	_, err := d.cli.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{})
+	return err
+}
+
+// NetworkDependents returns the ids of every container, running or not, that
+// shares the network namespace of the container id (named name).
+func (d *Client) NetworkDependents(ctx context.Context, id string, name string) ([]string, error) {
+	list, err := d.cli.ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, c := range list.Items {
+		if c.ID != id && selfupdate.JoinsNetworkOf(c.HostConfig.NetworkMode, id, name) {
+			ids = append(ids, c.ID)
+		}
+	}
+	return ids, nil
+}
+
+// ContainerCreate creates the replacement for the container inspectResp
+// describes, on whatever image its tag resolves to now. The old image is
+// inspected so the settings it supplied (env, labels, cmd, ...) are dropped
+// and the new image's own defaults apply: replaying them verbatim would pin a
+// container to its old image's ENV and labels forever. The old image is still
+// in the local store after the old container is removed, since nothing prunes
+// it; if it cannot be read, the replacement keeps those settings as before.
+func (d *Client) ContainerCreate(ctx context.Context, inspectResp docker.InspectResponse, name string) (string, error) {
+	var oldImage *image.InspectResponse
+	if result, err := d.cli.ImageInspect(ctx, inspectResp.Image); err == nil {
+		oldImage = &result.InspectResponse
+	} else {
+		log.Warn().Err(err).Str("image", inspectResp.Image).Msg("could not inspect the old image, keeping its settings on the replacement")
+	}
+
+	resp, err := d.cli.ContainerCreate(ctx, swap.ReplacementSpec(inspectResp, oldImage, name))
+	if err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
+func (d *Client) ServiceUpdate(ctx context.Context, serviceID string, imageName string) error {
+	inspectResult, err := d.cli.ServiceInspect(ctx, serviceID, client.ServiceInspectOptions{})
+	if err != nil {
+		return err
+	}
+	svc := inspectResult.Service
+	svc.Spec.TaskTemplate.ContainerSpec.Image = imageName
+	svc.Spec.TaskTemplate.ForceUpdate++
+	_, err = d.cli.ServiceUpdate(ctx, serviceID, client.ServiceUpdateOptions{
+		Version:             svc.Version,
+		Spec:                svc.Spec,
+		EncodedRegistryAuth: imagecheck.PullAuth(imageName),
+	})
+	return err
+}
+
+// daemonFilters builds the filter sent to the daemon. The daemon requires every "label"
+// filter to match, and a container has one value per key, so team=a,team=b could never
+// match. A key given several values is sent as just the key, and returned in anyOf for
+// the caller to check against the listed containers.
+func daemonFilters(labels container.ContainerLabels) (client.Filters, container.ContainerLabels) {
+	anyOf := make(container.ContainerLabels)
+	for _, label := range labels["label"] {
+		if key, value, ok := strings.Cut(label, "="); ok {
+			anyOf[key] = append(anyOf[key], value)
+		}
+	}
+	maps.DeleteFunc(anyOf, func(_ string, values []string) bool { return len(values) < 2 })
+
+	filterArgs := make(client.Filters)
+	for key, values := range labels {
+		for _, value := range values {
+			if key == "label" {
+				if labelKey, _, _ := strings.Cut(value, "="); len(anyOf[labelKey]) > 0 {
+					value = labelKey
+				}
+			}
+			filterArgs.Add(key, value)
+		}
+	}
+	return filterArgs, anyOf
+}
+
+func (d *Client) ListContainers(ctx context.Context, labels container.ContainerLabels) ([]container.Container, error) {
+	log.Debug().Interface("labels", labels).Str("host", d.host.Name).Msg("Listing containers")
+	filterArgs, anyOf := daemonFilters(labels)
+	containerListOptions := client.ContainerListOptions{
+		Filters: filterArgs,
+		All:     true,
+	}
+	list, err := d.cli.ContainerList(ctx, containerListOptions)
+	if err != nil {
+		return nil, err
+	}
+	list.Items = slices.DeleteFunc(list.Items, func(c docker.Summary) bool {
+		return !container.MatchesLabels(c.Labels, anyOf)
+	})
+
+	var containers = make([]container.Container, 0, len(list.Items))
+	for _, c := range list.Items {
+		containers = append(containers, newContainer(c, d.host.ID))
+	}
+
+	refs := make([]*container.Container, len(containers))
+	for i := range containers {
+		refs[i] = &containers[i]
+	}
+	d.mergeServiceLabels(ctx, refs...)
+
+	sort.Slice(containers, func(i, j int) bool {
+		return strings.ToLower(containers[i].Name) < strings.ToLower(containers[j].Name)
+	})
+
+	return containers, nil
+}
+
+func (d *Client) ContainerStats(ctx context.Context, id string, stats chan<- container.ContainerStat) error {
+	response, err := d.cli.ContainerStats(ctx, id, client.ContainerStatsOptions{Stream: true})
+
+	if err != nil {
+		return err
+	}
+
+	defer response.Body.Close()
+	decoder := json.NewDecoder(response.Body)
+	var v *docker.StatsResponse
+	for {
+		if err := decoder.Decode(&v); err != nil {
+			return err
+		}
+
+		var (
+			memPercent, cpuPercent float64
+			mem, memLimit          float64
+			previousCPU            uint64
+			previousSystem         uint64
+			networkRx, networkTx   uint64
+			diskRead, diskWrite    uint64
+		)
+		daemonOSType := v.OSType
+
+		if daemonOSType != "windows" {
+			previousCPU = v.PreCPUStats.CPUUsage.TotalUsage
+			previousSystem = v.PreCPUStats.SystemUsage
+			cpuPercent = calculateCPUPercentUnix(previousCPU, previousSystem, v)
+			mem = calculateMemUsageUnixNoCache(v.MemoryStats)
+			memLimit = float64(v.MemoryStats.Limit)
+			memPercent = calculateMemPercentUnixNoCache(memLimit, mem)
+		} else {
+			cpuPercent = calculateCPUPercentWindows(v)
+			mem = float64(v.MemoryStats.PrivateWorkingSet)
+		}
+
+		// Calculate total network bytes across all interfaces
+		for _, netStats := range v.Networks {
+			networkRx += netStats.RxBytes
+			networkTx += netStats.TxBytes
+		}
+
+		// Sum disk read/write bytes across all block devices
+		for _, blkio := range v.BlkioStats.IoServiceBytesRecursive {
+			switch strings.ToLower(blkio.Op) {
+			case "read":
+				diskRead += blkio.Value
+			case "write":
+				diskWrite += blkio.Value
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case stats <- container.ContainerStat{
+			ID:             id,
+			CPUPercent:     cpuPercent,
+			MemoryPercent:  memPercent,
+			MemoryUsage:    mem,
+			NetworkRxTotal: networkRx,
+			NetworkTxTotal: networkTx,
+			DiskReadTotal:  diskRead,
+			DiskWriteTotal: diskWrite,
+		}:
+		}
+	}
+}
+
+func (d *Client) ContainerLogs(ctx context.Context, id string, since time.Time, stdType container.StdType) (io.ReadCloser, error) {
+	log.Debug().Str("id", id).Time("since", since).Stringer("stdType", stdType).Str("host", d.host.Name).Msg("Streaming logs for container")
+
+	sinceQuery := since.Add(-50 * time.Millisecond).Format(time.RFC3339Nano)
+	options := client.ContainerLogsOptions{
+		ShowStdout: stdType&container.STDOUT != 0,
+		ShowStderr: stdType&container.STDERR != 0,
+		Follow:     true,
+		Tail:       strconv.Itoa(100),
+		Timestamps: true,
+		Since:      sinceQuery,
+	}
+
+	reader, err := d.cli.ContainerLogs(ctx, id, options)
+	if err != nil {
+		return nil, err
+	}
+
+	return reader, nil
+}
+
+func (d *Client) ContainerEvents(ctx context.Context, messages chan<- container.ContainerEvent) error {
+	eventsResult := d.cli.Events(ctx, client.EventsListOptions{})
+	dockerMessages := eventsResult.Messages
+	err := eventsResult.Err
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-err:
+			return err
+
+		case message := <-dockerMessages:
+			if message.Type == events.ContainerEventType && len(message.Actor.ID) > 0 {
+				// ctx-guarded: an unguarded send outlives its consumer, and this
+				// goroutine is what tells the store its event stream has ended.
+				select {
+				case messages <- container.ContainerEvent{
+					ActorID:         message.Actor.ID[:12],
+					Name:            d.healthAction(ctx, string(message.Action), message.Actor.ID),
+					Host:            d.host.ID,
+					ActorAttributes: message.Actor.Attributes,
+					Time:            time.Now(),
+				}:
+				case <-ctx.Done():
+					return nil
+				}
+			}
+		}
+	}
+}
+
+func (d *Client) ContainerLogsBetweenDates(ctx context.Context, id string, from time.Time, to time.Time, stdType container.StdType) (io.ReadCloser, error) {
+	log.Debug().Str("id", id).Time("from", from).Time("to", to).Stringer("stdType", stdType).Str("host", d.host.Name).Msg("Fetching logs between dates for container")
+	options := client.ContainerLogsOptions{
+		ShowStdout: stdType&container.STDOUT != 0,
+		ShowStderr: stdType&container.STDERR != 0,
+		Timestamps: true,
+		Since:      from.Format(time.RFC3339Nano),
+		Until:      to.Format(time.RFC3339Nano),
+	}
+
+	reader, err := d.cli.ContainerLogs(ctx, id, options)
+	if err != nil {
+		return nil, err
+	}
+
+	return reader, nil
+}
+
+// ContainerLogsTail returns the newest `lines` lines of both streams, oldest
+// first, with timestamps. Unlike a read with `since`, the daemon seeks to them
+// from the end of the log instead of decoding it from the start.
+func (d *Client) ContainerLogsTail(ctx context.Context, id string, lines int) (io.ReadCloser, error) {
+	return d.cli.ContainerLogs(ctx, id, client.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Timestamps: true,
+		Tail:       strconv.Itoa(lines),
+	})
+}
+
+func (d *Client) Ping(ctx context.Context) error {
+	_, err := d.cli.Ping(ctx, client.PingOptions{})
+	return err
+}
+
+func (d *Client) Host() container.Host {
+	h := d.host
+	// Host-level metrics are read live (and cached for a few seconds) so they
+	// don't freeze at the value seen at startup. Only an engine on this machine
+	// can be read this way; remote hosts would get theirs through the agent.
+	if d.hostMetrics {
+		m, ok := d.readHostMetrics()
+		h.ApplyHostMetrics(m, ok)
+	}
+	return h
+}
+
+func (d *Client) ContainerAttach(ctx context.Context, id string) (*container.ExecSession, error) {
+	log.Debug().Str("id", id).Str("host", d.host.Name).Msg("Attaching to container")
+	options := client.ContainerAttachOptions{
+		Stream: true,
+		Stdin:  true,
+		Stdout: true,
+		Stderr: true,
+	}
+
+	waiter, err := d.cli.ContainerAttach(ctx, id, options)
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Docker attach doesn't support resize - it's not an exec session
+	// Return a no-op resize function
+	resizeFn := func(width uint, height uint) error {
+		log.Debug().Uint("width", width).Uint("height", height).Msg("resize not supported for attach")
+		return nil
+	}
+
+	return &container.ExecSession{
+		Writer: waiter.Conn,
+		Reader: waiter.Reader,
+		Resize: resizeFn,
+	}, nil
+}
+
+func (d *Client) ContainerExec(ctx context.Context, id string, cmd []string) (*container.ExecSession, error) {
+	log.Debug().Str("id", id).Str("host", d.host.Name).Msg("Executing command in container")
+	options := client.ExecCreateOptions{
+		AttachStdout: true,
+		AttachStderr: true,
+		AttachStdin:  true,
+		Cmd:          cmd,
+		TTY:          true,
+	}
+
+	execID, err := d.cli.ExecCreate(ctx, id, options)
+	if err != nil {
+		return nil, err
+	}
+
+	waiter, err := d.cli.ExecAttach(ctx, execID.ID, client.ExecAttachOptions{TTY: true})
+	if err != nil {
+		return nil, err
+	}
+
+	// Initial resize
+	if _, err = d.cli.ExecResize(ctx, execID.ID, client.ExecResizeOptions{
+		Width:  100,
+		Height: 40,
+	}); err != nil {
+		return nil, err
+	}
+
+	// Create resize closure that captures execID and context
+	resizeFn := func(width uint, height uint) error {
+		_, err := d.cli.ExecResize(ctx, execID.ID, client.ExecResizeOptions{
+			Width:  width,
+			Height: height,
+		})
+		return err
+	}
+
+	return &container.ExecSession{
+		Writer: waiter.Conn,
+		Reader: waiter.Reader,
+		Resize: resizeFn,
+	}, nil
+}
+
+// coolifyName returns the Coolify service name for display, prefixed with the
+// pull-request id for PR-preview deployments. Coolify sets an identical
+// coolify.serviceName label on an application and every one of its PR previews,
+// so without the PR id all previews of the same app are indistinguishable in
+// the UI. Returns "" when the container is not Coolify-managed.
+func coolifyName(labels map[string]string) string {
+	name := labels["coolify.serviceName"]
+	if name == "" {
+		return ""
+	}
+	if pr := labels["coolify.pullRequestId"]; pr != "" && pr != "0" {
+		return "PR " + pr + " · " + name
+	}
+	return name
+}
+
+func newContainer(c docker.Summary, host string) container.Container {
+	name := "no name"
+	if c.Labels["dev.dozzle.name"] != "" {
+		name = c.Labels["dev.dozzle.name"]
+	} else if n := coolifyName(c.Labels); n != "" {
+		name = n
+	} else if len(c.Names) > 0 {
+		name = strings.TrimPrefix(c.Names[0], "/")
+	}
+
+	group := ""
+	if c.Labels["dev.dozzle.group"] != "" {
+		group = c.Labels["dev.dozzle.group"]
+	} else if c.Labels["coolify.projectName"] != "" {
+		group = c.Labels["coolify.projectName"]
+	}
+
+	// Same `ip:host->container/proto` shape newContainerFromJSON produces, so the UI has one
+	// format to parse. Only published bindings have a host side; exposed-only ports are dropped.
+	var ports []string
+	for _, p := range c.Ports {
+		if p.PublicPort == 0 {
+			continue
+		}
+		ip := ""
+		if p.IP.IsValid() {
+			ip = p.IP.String()
+		}
+		ports = append(ports, fmt.Sprintf("%s:%d->%d/%s", ip, p.PublicPort, p.PrivatePort, p.Type))
+	}
+
+	return container.Container{
+		ID:      c.ID[:12],
+		Name:    name,
+		Image:   c.Image,
+		Command: c.Command,
+		Created: time.Unix(c.Created, 0),
+		State:   string(c.State),
+		Host:    host,
+		Labels:  c.Labels,
+		Stats:   utils.NewRingBuffer[container.ContainerStat](300), // 300 seconds of stats
+		Group:   group,
+		Ports:   ports,
+	}
+}
+
+func newContainerFromJSON(c docker.InspectResponse, host string) container.Container {
+	name := "no name"
+	if c.Config.Labels["dev.dozzle.name"] != "" {
+		name = c.Config.Labels["dev.dozzle.name"]
+	} else if n := coolifyName(c.Config.Labels); n != "" {
+		name = n
+	} else if len(c.Name) > 0 {
+		name = strings.TrimPrefix(c.Name, "/")
+	}
+
+	group := ""
+	if c.Config.Labels["dev.dozzle.group"] != "" {
+		group = c.Config.Labels["dev.dozzle.group"]
+	} else if c.Config.Labels["coolify.projectName"] != "" {
+		group = c.Config.Labels["coolify.projectName"]
+	}
+
+	// Format port bindings as readable strings
+	var ports []string
+	for port, bindings := range c.HostConfig.PortBindings {
+		for _, b := range bindings {
+			if b.HostPort != "" {
+				// An unset HostIP is the zero netip.Addr, which prints as "invalid IP".
+				ip := ""
+				if b.HostIP.IsValid() {
+					ip = b.HostIP.String()
+				}
+				ports = append(ports, fmt.Sprintf("%s:%s->%s", ip, b.HostPort, port))
+			} else {
+				ports = append(ports, port.String())
+			}
+		}
+	}
+
+	// Capture mounts in structured form
+	mounts := make([]container.Mount, 0, len(c.Mounts))
+	for _, m := range c.Mounts {
+		mounts = append(mounts, container.Mount{
+			Type:        string(m.Type),
+			Source:      m.Source,
+			Destination: m.Destination,
+			RW:          m.RW,
+			Name:        m.Name,
+		})
+	}
+
+	var networks []container.ContainerNetwork
+	if c.NetworkSettings != nil {
+		for name, endpoint := range c.NetworkSettings.Networks {
+			n := container.ContainerNetwork{Name: name}
+			if endpoint != nil && endpoint.IPAddress.IsValid() {
+				n.IP = endpoint.IPAddress.String()
+			}
+			networks = append(networks, n)
+		}
+		slices.SortFunc(networks, func(a, b container.ContainerNetwork) int { return cmp.Compare(a.Name, b.Name) })
+	}
+
+	restartPolicy := ""
+	if c.HostConfig.RestartPolicy.Name != "" {
+		restartPolicy = string(c.HostConfig.RestartPolicy.Name)
+	}
+
+	container := container.Container{
+		ID:            c.ID[:12],
+		Name:          name,
+		Image:         c.Config.Image,
+		Command:       strings.Join(c.Config.Entrypoint, " ") + " " + strings.Join(c.Config.Cmd, " "),
+		State:         string(c.State.Status),
+		Host:          host,
+		Labels:        c.Config.Labels,
+		Stats:         utils.NewRingBuffer[container.ContainerStat](300), // 300 seconds of stats
+		Group:         group,
+		Tty:           c.Config.Tty,
+		MemoryLimit:   uint64(c.HostConfig.Memory),
+		CPULimit:      float64(c.HostConfig.NanoCPUs) / 1e9,
+		Env:           c.Config.Env,
+		Ports:         ports,
+		Mounts:        mounts,
+		RestartPolicy: restartPolicy,
+		NetworkMode:   string(c.HostConfig.NetworkMode),
+		Networks:      networks,
+		FullyLoaded:   true,
+		RestartCount:  c.RestartCount,
+	}
+	if c.State != nil {
+		container.OOMKilled = c.State.OOMKilled
+		container.ExitCode = c.State.ExitCode
+	}
+
+	if createdAt, err := time.Parse(time.RFC3339Nano, c.Created); err == nil {
+		container.Created = createdAt.UTC()
+	}
+
+	if startedAt, err := time.Parse(time.RFC3339Nano, c.State.StartedAt); err == nil {
+		container.StartedAt = startedAt.UTC()
+	}
+
+	if stoppedAt, err := time.Parse(time.RFC3339Nano, c.State.FinishedAt); err == nil {
+		container.FinishedAt = stoppedAt.UTC()
+	}
+
+	// Docker keeps the last health status after a container stops, flipped to
+	// "unhealthy" by the kill. Neither describes a container that is not running.
+	if c.State.Health != nil && c.State.Running {
+		container.Health = strings.ToLower(string(c.State.Health.Status))
+	}
+
+	return container
+}

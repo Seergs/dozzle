@@ -16,6 +16,16 @@ import (
 
 var cloudHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
+// cloudWebURL is the browser-facing half of Dozzle Cloud (dashboard, settings,
+// the link flow). DOLIGENCE_URL is the API half and is a different host, so the
+// two cannot share one variable.
+func cloudWebURL() string {
+	if url := os.Getenv("CLOUD_URL"); url != "" {
+		return url
+	}
+	return "https://cloud.dozzle.dev"
+}
+
 type exchangeTokenResponse struct {
 	Key       string  `json:"key"`
 	Prefix    string  `json:"prefix"`
@@ -46,6 +56,11 @@ func (h *handler) cloudCallback(w http.ResponseWriter, r *http.Request) {
 	from := r.URL.Query().Get("from")
 	if token == "" {
 		http.Error(w, "missing token parameter", http.StatusBadRequest)
+		return
+	}
+	if !h.cloudLinks.consume(r.URL.Query().Get("state"), cloudLinkOwner(r)) {
+		log.Warn().Msg("cloud callback without a state this user started, refusing to link")
+		http.Error(w, "this link was not started from this Dozzle, start it again from Dozzle", http.StatusForbidden)
 		return
 	}
 
@@ -137,6 +152,21 @@ func (h *handler) cloudCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
 
+// cloudPlan is the part of Cloud's status this server acts on.
+type cloudPlan struct {
+	Name string `json:"name"`
+	// Decided by Cloud. Nil from a Cloud older than the field, which falls back
+	// to the names that were paid when it shipped.
+	Paid *bool `json:"paid"`
+}
+
+func (p cloudPlan) isPaid() bool {
+	if p.Paid != nil {
+		return *p.Paid
+	}
+	return p.Name == "pro" || p.Name == "team"
+}
+
 func (h *handler) cloudStatus(w http.ResponseWriter, r *http.Request) {
 	cc := h.hostService.CloudConfig()
 	if cc == nil || cc.APIKey == "" {
@@ -193,11 +223,10 @@ func (h *handler) cloudStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var statusResp struct {
-		Plan struct {
-			Name string `json:"name"`
-		} `json:"plan"`
+		Plan cloudPlan `json:"plan"`
 	}
-	if json.Unmarshal(body, &statusResp) == nil && statusResp.Plan.Name == "pro" {
+	// Re-establish the connection after an upgrade to any paid plan.
+	if json.Unmarshal(body, &statusResp) == nil && statusResp.Plan.isPaid() {
 		if h.config.Cloud.OnSetup != nil {
 			h.config.Cloud.OnSetup()
 		}
@@ -215,14 +244,16 @@ type cloudConfigResponse struct {
 	StreamLogs bool    `json:"streamLogs"`
 }
 
-func (h *handler) cloudConfig(w http.ResponseWriter, r *http.Request) {
+// cloudConfigPayload is what /api/cloud/config answers with, and what the shell
+// inlines so the page does not have to ask. It reads straight out of memory, so
+// serving it with the HTML costs nothing. nil means this instance is not linked.
+func (h *handler) cloudConfigPayload() *cloudConfigResponse {
 	cc := h.hostService.CloudConfig()
 	if cc == nil {
-		writeError(w, http.StatusNotFound, "no cloud configuration")
-		return
+		return nil
 	}
 
-	resp := cloudConfigResponse{
+	resp := &cloudConfigResponse{
 		Prefix:     cc.Prefix,
 		Linked:     true,
 		StreamLogs: cc.StreamLogsEnabled(),
@@ -230,6 +261,15 @@ func (h *handler) cloudConfig(w http.ResponseWriter, r *http.Request) {
 	if cc.ExpiresAt != nil {
 		s := cc.ExpiresAt.Format(time.RFC3339)
 		resp.ExpiresAt = &s
+	}
+	return resp
+}
+
+func (h *handler) cloudConfig(w http.ResponseWriter, r *http.Request) {
+	resp := h.cloudConfigPayload()
+	if resp == nil {
+		writeError(w, http.StatusNotFound, "no cloud configuration")
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

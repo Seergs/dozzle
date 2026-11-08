@@ -8,6 +8,7 @@ export interface NotificationRule {
   eventExpression?: string;
   cooldown?: number;
   sampleWindow?: number;
+  immediate?: boolean;
   triggerCount: number;
   triggeredContainers: number;
   lastTriggeredAt: string | null;
@@ -35,6 +36,7 @@ export interface NotificationRuleInput {
   eventExpression?: string;
   cooldown?: number;
   sampleWindow?: number;
+  immediate?: boolean;
 }
 
 export interface PreviewResult {
@@ -59,12 +61,43 @@ export interface PreviewResult {
   }[];
   totalLogs: number;
   messageKeys?: string[];
+  /** How many matched containers were actually read for logs (the scan is capped). */
+  scannedContainers: number;
+  /** How far back the log preview looked, in seconds. */
+  logWindowSeconds: number;
+  metricSamples?: MetricSample[];
+  eventSamples?: EventSample[];
+}
+
+/** A dry run of the metric expression against one container's buffered stats. */
+export interface MetricSample {
+  containerId: string;
+  name: string;
+  host: string;
+  cpu: number;
+  memory: number;
+  memoryUsage: number;
+  /** Whether the most recent sample matches. */
+  matches: boolean;
+  matchedSamples: number;
+  totalSamples: number;
+  /** Whether a full sample window is matched well enough to fire. */
+  wouldTrigger: boolean;
+}
+
+/** A representative container event, tagged with whether the event expression matches it. */
+export interface EventSample {
+  name: string;
+  attributes?: Record<string, string>;
+  matches: boolean;
 }
 
 export interface TestWebhookResult {
   success: boolean;
   statusCode?: number;
   error?: string;
+  /** Alert kinds (log, metric, event) the template fails to render. */
+  unsupported?: string[];
 }
 
 export interface CloudConfig {
@@ -76,6 +109,26 @@ export interface CloudConfig {
 
 export interface CloudStatus {
   user: { email: string; name: string };
-  plan: { name: string; events_per_month: number; retention_days: number };
-  usage: { events_used: number; events_limit: number; period: string };
+  plan: {
+    name: string;
+    // What the plan buys, decided by Cloud. Optional only because an older Cloud
+    // does not send them; see `isPro` for what stands in until it does.
+    paid?: boolean;
+    metrics_lookback_hours?: number;
+    events_per_month: number;
+    agent_messages_per_month?: number;
+    log_bytes_per_month?: number;
+    retention_days: number;
+  };
+  // Agent chats and indexed log bytes are metered too, but a cloud older than they are
+  // does not send them, so everything past events is optional and rendered only when present.
+  usage: {
+    events_used: number;
+    events_limit: number;
+    agent_messages_used?: number;
+    agent_messages_limit?: number;
+    log_bytes_used?: number;
+    log_bytes_limit?: number;
+    period: string;
+  };
 }

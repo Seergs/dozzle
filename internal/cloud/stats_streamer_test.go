@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/amir20/dozzle/internal/container"
-	container_support "github.com/amir20/dozzle/internal/support/container"
 	pb "github.com/amir20/dozzle/proto/cloud"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,7 +27,7 @@ func (f *fakeStatsHostService) ListAllContainers(_ container.ContainerLabels) ([
 	return f.containers, nil
 }
 
-func (f *fakeStatsHostService) FindContainer(_ string, _ string, _ container.ContainerLabels) (*container_support.ContainerService, error) {
+func (f *fakeStatsHostService) FindContainer(_ string, _ string, _ container.ContainerLabels) (*container.ContainerService, error) {
 	return nil, nil
 }
 
@@ -167,10 +166,14 @@ func TestStatsStreamer_EmptyWindowSendsNothing(t *testing.T) {
 	assert.Len(t, *sent, 1, "no new batch after the container went quiet")
 }
 
-func TestStatsStreamer_SkipsDisabledContainers(t *testing.T) {
-	disabled := testContainer("c1", "secret")
-	disabled.Labels[cloudMinLevelLabel] = "disabled"
-	ss, sent := newTestStreamer(t, []container.Container{disabled, testContainer("c2", "api")}, 1)
+// min_level is a LOG filter. Silencing a container's logs must not also blank
+// its CPU/memory graphs — that coupling was never in the label's documented
+// contract, and it made a noisy container's metrics disappear as a side effect
+// of quieting it.
+func TestStatsStreamer_MinLevelDoesNotDisableStats(t *testing.T) {
+	quiet := testContainer("c1", "noisy")
+	quiet.Labels[cloudMinLevelLabel] = "disabled"
+	ss, sent := newTestStreamer(t, []container.Container{quiet, testContainer("c2", "api")}, 1)
 
 	ss.observe(StatSample{HostID: "host1", Stat: container.ContainerStat{ID: "c1", CPUPercent: 90}})
 	ss.observe(StatSample{HostID: "host1", Stat: container.ContainerStat{ID: "c2", CPUPercent: 10}})
@@ -178,8 +181,9 @@ func TestStatsStreamer_SkipsDisabledContainers(t *testing.T) {
 
 	require.Len(t, *sent, 1)
 	entries := (*sent)[0].GetEntries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, "api", entries[0].GetContainerName())
+	require.Len(t, entries, 2)
+	names := []string{entries[0].GetContainerName(), entries[1].GetContainerName()}
+	assert.ElementsMatch(t, []string{"noisy", "api"}, names)
 }
 
 func TestStatsStreamer_HoldsThenDropsUnresolvedContainers(t *testing.T) {

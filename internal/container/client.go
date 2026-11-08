@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 )
@@ -58,4 +59,74 @@ type Client interface {
 	ContainerActions(ctx context.Context, action ContainerAction, containerID string) error
 	ContainerAttach(ctx context.Context, id string) (*ExecSession, error)
 	ContainerExec(ctx context.Context, id string, cmd []string) (*ExecSession, error)
+}
+
+// SizeReader is implemented by clients that can report how much a container's
+// writable layer holds. Docker works it out by walking the layer on every call
+// and keeps nothing, so the store asks rarely (see size_monitor.go). k8s reads
+// the kubelet's stats summary instead.
+type SizeReader interface {
+	// ContainerSizes measures every container in one call.
+	ContainerSizes(ctx context.Context) (map[string]int64, error)
+	// ContainerSize measures one container.
+	ContainerSize(ctx context.Context, id string) (int64, error)
+	// DiskUsage measures every volume on the host, and reads what images and build
+	// cache nothing uses. There is no way to measure one volume, so this is always
+	// a walk of all of them.
+	DiskUsage(ctx context.Context) (DiskUsage, error)
+}
+
+// PeriodicSizeReader is a SizeReader whose stats carry no DiskWriteTotal, so no write
+// can say a layer changed. A running container is measured again every
+// sizeRefreshInterval instead, which only suits a reader that measures cheaply.
+type PeriodicSizeReader interface {
+	SizeReader
+	MeasuresPeriodically()
+}
+
+// ErrLayerSizeUnsupported is what a SizeReader returns for a container's layer when
+// its storage driver can only size one by diffing the container's whole filesystem
+// against its image (btrfs, zfs, vfs, overlay2 without native diff). On those a batch
+// over every container can run the daemon out of memory, so layers are not sized.
+var ErrLayerSizeUnsupported = errors.New("storage driver cannot size a layer without walking its whole filesystem")
+
+// DiskUsage is one DiskUsage call's result.
+type DiskUsage struct {
+	// Volumes are the volumes each container mounts, keyed by container ID.
+	Volumes map[string][]VolumeUsage
+	// Reclaimable leaves the container fields zero: stopped containers' layers are
+	// already in the store, and asking Docker again would walk them all a second time.
+	Reclaimable Reclaimable
+}
+
+// Pruner is implemented by clients that can delete what Reclaimable counts. k8s
+// has nothing to prune, and its client does not implement it.
+type Pruner interface {
+	Prune(ctx context.Context, opts PruneOptions) (PruneResult, error)
+}
+
+// ReclaimableLister is implemented by clients that can name what a prune of
+// images and volumes would delete.
+type ReclaimableLister interface {
+	ListReclaimable(ctx context.Context) (ReclaimableItems, error)
+}
+
+// PruneOptions picks the kinds a prune deletes. Each one is the matching
+// `docker <kind> prune`, widened to everything unused (`-a`, and named volumes
+// too) so that it frees what Reclaimable counts.
+type PruneOptions struct {
+	Images     bool `json:"images"`
+	Volumes    bool `json:"volumes"`
+	Containers bool `json:"containers"`
+	BuildCache bool `json:"buildCache"`
+}
+
+// Any reports whether at least one kind is picked.
+func (o PruneOptions) Any() bool {
+	return o.Images || o.Volumes || o.Containers || o.BuildCache
+}
+
+// PruneResult is what a prune freed, as Docker reports it.
+type PruneResult struct {
+	SpaceReclaimed uint64 `json:"spaceReclaimed"`
 }

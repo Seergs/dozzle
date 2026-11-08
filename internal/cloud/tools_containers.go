@@ -1,12 +1,16 @@
 package cloud
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/amir20/dozzle/internal/container"
 	pb "github.com/amir20/dozzle/proto/cloud"
+	"github.com/rs/zerolog/log"
 )
 
 type inspectContainerArgs struct {
@@ -22,7 +26,7 @@ type findContainersArgs struct {
 }
 
 func executeListHosts(deps ToolDeps) (*pb.CallToolResponse, error) {
-	hosts := deps.HostService.Hosts()
+	hosts := deps.scoped().Hosts()
 	result := make([]*pb.HostInfo, len(hosts))
 	for i, h := range hosts {
 		result[i] = &pb.HostInfo{
@@ -50,7 +54,7 @@ func executeFindContainers(argsJSON string, deps ToolDeps) (*pb.CallToolResponse
 		}
 	}
 
-	containers, errs := deps.HostService.ListAllContainers(deps.Labels)
+	containers, errs := deps.scoped().ListAllContainers()
 	logHostErrors(errs)
 	hostNames := buildHostNameMap(deps.HostService)
 
@@ -77,7 +81,7 @@ func executeFindContainers(argsJSON string, deps ToolDeps) (*pb.CallToolResponse
 }
 
 func executeListRunningContainers(deps ToolDeps) (*pb.CallToolResponse, error) {
-	containers, errs := deps.HostService.ListAllContainers(deps.Labels)
+	containers, errs := deps.scoped().ListAllContainers()
 	logHostErrors(errs)
 	hostNames := buildHostNameMap(deps.HostService)
 
@@ -95,7 +99,7 @@ func executeListRunningContainers(deps ToolDeps) (*pb.CallToolResponse, error) {
 }
 
 func executeListAllContainers(deps ToolDeps) (*pb.CallToolResponse, error) {
-	containers, errs := deps.HostService.ListAllContainers(deps.Labels)
+	containers, errs := deps.scoped().ListAllContainers()
 	logHostErrors(errs)
 	hostNames := buildHostNameMap(deps.HostService)
 
@@ -110,7 +114,7 @@ func executeListAllContainers(deps ToolDeps) (*pb.CallToolResponse, error) {
 }
 
 func executeGetRunningContainerStats(deps ToolDeps) (*pb.CallToolResponse, error) {
-	containers, errs := deps.HostService.ListAllContainers(deps.Labels)
+	containers, errs := deps.scoped().ListAllContainers()
 	logHostErrors(errs)
 	hostNames := buildHostNameMap(deps.HostService)
 
@@ -163,7 +167,7 @@ func executeGetRunningContainerStats(deps ToolDeps) (*pb.CallToolResponse, error
 	}, nil
 }
 
-func executeInspectContainer(argsJSON string, deps ToolDeps) (*pb.CallToolResponse, error) {
+func executeInspectContainer(ctx context.Context, argsJSON string, deps ToolDeps) (*pb.CallToolResponse, error) {
 	var args inspectContainerArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return nil, fmt.Errorf("failed to parse arguments: %w", err)
@@ -177,33 +181,142 @@ func executeInspectContainer(argsJSON string, deps ToolDeps) (*pb.CallToolRespon
 		return nil, err
 	}
 
-	cs, err := deps.HostService.FindContainer(hostID, containerID, deps.Labels)
+	cs, err := deps.scoped().FindContainer(hostID, containerID)
 	if err != nil {
 		return nil, fmt.Errorf("container not found: %w", err)
 	}
 
-	c := cs.Container
+	result := inspectResult(cs.Container, buildHostNameMap(deps.HostService))
+	result.HealthLog = recentHealthProbes(ctx, cs)
 	return &pb.CallToolResponse{
 		Success: true,
-		Result: &pb.CallToolResponse_InspectContainer{InspectContainer: &pb.InspectContainerResult{
-			Id:            c.ID,
-			Name:          c.Name,
-			Image:         c.Image,
-			Command:       c.Command,
-			Created:       c.Created.UTC().Format(time.RFC3339),
-			StartedAt:     c.StartedAt.UTC().Format(time.RFC3339),
-			FinishedAt:    formatTimeOrEmpty(c.FinishedAt),
-			State:         c.State,
-			Health:        c.Health,
-			HostName:      resolveHostName(c.Host, buildHostNameMap(deps.HostService)),
-			HostId:        c.Host,
-			Labels:        c.Labels,
-			MemoryLimit:   c.MemoryLimit,
-			CpuLimit:      c.CPULimit,
-			Ports:         c.Ports,
-			Mounts:        mountStrings(c.Mounts),
-			RestartPolicy: c.RestartPolicy,
-			NetworkMode:   c.NetworkMode,
-		}},
+		Result:  &pb.CallToolResponse_InspectContainer{InspectContainer: result},
+	}, nil
+}
+
+const (
+	// healthLogProbes is how many of Docker's last five healthcheck runs
+	// inspect_container returns, newest kept.
+	healthLogProbes = 3
+	// healthLogOutputBytes clips each run's output. Docker keeps up to 4 KiB.
+	healthLogOutputBytes = 500
+	// healthLogTimeout bounds the live read so a slow engine or agent cannot
+	// hold up the rest of the inspect.
+	healthLogTimeout = 5 * time.Second
+)
+
+// healthLogSource is the part of a ContainerService recentHealthProbes reads.
+type healthLogSource interface {
+	HealthLog(ctx context.Context) ([]container.HealthProbe, error)
+}
+
+// recentHealthProbes reads the last healthcheck runs live from the engine.
+// The store caches only the status, so this is the one place their exit codes
+// and output show up. A failed read leaves them out rather than failing the
+// inspect.
+func recentHealthProbes(ctx context.Context, src healthLogSource) []*pb.HealthProbe {
+	ctx, cancel := context.WithTimeout(ctx, healthLogTimeout)
+	defer cancel()
+	probes, err := src.HealthLog(ctx)
+	if err != nil {
+		if !errors.Is(err, errors.ErrUnsupported) {
+			log.Debug().Err(err).Msg("inspect_container: could not read healthcheck runs")
+		}
+		return nil
+	}
+	if len(probes) > healthLogProbes {
+		probes = probes[len(probes)-healthLogProbes:]
+	}
+	out := make([]*pb.HealthProbe, 0, len(probes))
+	for _, p := range probes {
+		out = append(out, &pb.HealthProbe{
+			Start:    formatTimeOrEmpty(p.Start),
+			End:      formatTimeOrEmpty(p.End),
+			ExitCode: int32(p.ExitCode),
+			Output:   clipUTF8(strings.TrimSpace(p.Output), healthLogOutputBytes),
+		})
+	}
+	return out
+}
+
+// inspectResult is what inspect_container and inspect_containers return for
+// one container.
+func inspectResult(c container.Container, hostNames map[string]string) *pb.InspectContainerResult {
+	return &pb.InspectContainerResult{
+		Id:            c.ID,
+		Name:          c.Name,
+		Image:         c.Image,
+		Command:       c.Command,
+		Created:       c.Created.UTC().Format(time.RFC3339),
+		StartedAt:     c.StartedAt.UTC().Format(time.RFC3339),
+		FinishedAt:    formatTimeOrEmpty(c.FinishedAt),
+		State:         c.State,
+		Health:        c.Health,
+		HostName:      resolveHostName(c.Host, hostNames),
+		HostId:        c.Host,
+		Labels:        c.Labels,
+		MemoryLimit:   c.MemoryLimit,
+		CpuLimit:      c.CPULimit,
+		Ports:         c.Ports,
+		Mounts:        mountStrings(c.Mounts),
+		MountDetails:  mountDetails(c.Mounts),
+		RestartPolicy: c.RestartPolicy,
+		NetworkMode:   c.NetworkMode,
+		RestartCount:  int32(c.RestartCount),
+		OomKilled:     c.OOMKilled,
+		ExitCode:      int32(c.ExitCode),
+	}
+}
+
+type checkImageUpdatesArgs struct {
+	Name    string `json:"name"`
+	Image   string `json:"image"`
+	Refresh bool   `json:"refresh"`
+}
+
+// executeCheckImageUpdates answers with every checked container, current ones
+// included, so the cloud can say how many are up to date and why some could
+// not be checked rather than only listing what is outdated.
+func executeCheckImageUpdates(ctx context.Context, argsJSON string, deps ToolDeps) (*pb.CallToolResponse, error) {
+	if !deps.ImageCheckMode.Allows(true) {
+		return nil, fmt.Errorf("image update checks are off on this Dozzle instance (--image-check-mode)")
+	}
+
+	var args checkImageUpdatesArgs
+	if argsJSON != "" {
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return nil, fmt.Errorf("failed to parse arguments: %w", err)
+		}
+	}
+
+	containers, errs := deps.scoped().ListAllContainers()
+	logHostErrors(errs)
+	var matched []container.Container
+	for _, c := range containers {
+		if (args.Name == "" || containsIgnoreCase(c.Name, args.Name)) &&
+			(args.Image == "" || containsIgnoreCase(c.Image, args.Image)) {
+			matched = append(matched, c)
+		}
+	}
+	// The listing is scoped, so each lookup after it can skip the labels
+	// rather than re-list a host per container.
+	updates := container.CheckImageUpdates(ctx, deps.HostService, matched, args.Refresh)
+	hostNames := buildHostNameMap(deps.HostService)
+
+	result := make([]*pb.ContainerInfo, len(updates))
+	for i, u := range updates {
+		info := containerToProto(u.Container, hostNames)
+		info.ImageUpdate = &pb.ImageUpdate{
+			Status:       string(u.Result.Status),
+			LocalDigest:  u.Result.LocalDigest,
+			RemoteDigest: u.Result.RemoteDigest,
+			Reason:       u.Result.Reason,
+			CheckedAt:    u.Result.CheckedAt.Unix(),
+		}
+		result[i] = info
+	}
+	return &pb.CallToolResponse{
+		Success: true,
+		Result:  &pb.CallToolResponse_ListContainers{ListContainers: &pb.ListContainersResult{Containers: result}},
 	}, nil
 }

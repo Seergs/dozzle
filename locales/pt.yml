@@ -5,39 +5,101 @@ toolbar:
   search: Pesquisar
   inverse-on: Excluir correspondências (inverso)
   inverse-off: Incluir correspondências (normal)
+  invalid-regex: Expressão regular inválida
+  close-search: Fechar pesquisa
+  move-search: Arraste para mover
+  search-all-containers: Pesquisar em todos os contêineres
   show: Mostrar {std}
   show-all: Mostrar tudo
   stop: Parar
   start: Iniciar
   restart: Reiniciar
+  rollout-restart: "Reiniciar {kind}"
+  rollout-restart-done: "{workload} está implantando novos pods."
+  section-containers: "Containers"
+  restart-all: "Reiniciar todos"
+  stop-all: "Parar todos"
+  start-all: "Iniciar todos"
+  bulk-confirm-restart: "Reiniciar 1 container? | Reiniciar {count} containers?"
+  bulk-confirm-stop: "Parar 1 container? | Parar {count} containers?"
+  bulk-confirm-start: "Iniciar 1 container? | Iniciar {count} containers?"
+  bulk-self-skipped: "O container do próprio Dozzle é ignorado."
+  bulk-more: "e mais {count}"
+  bulk-failed: "Não concluído para {names}"
   update: Atualizar
   update-service: Atualizar Serviço
   update-pulling: Baixando imagem mais recente...
   update-recreating: Recriando container...
+  update-verifying: Verificando se o novo container continua em execução...
+  update-rolled-back: O novo container não continuou em execução, então o anterior foi restaurado.
   update-done: Container atualizado com sucesso
   update-up-to-date: Já está atualizado
-  update-available: 'Atualização disponível'
-  check-for-updates: 'Procurar atualizações'
-  checking-for-updates: 'Procurando atualizações...'
-  no-updates: 'Sem atualizações'
-  dismiss-update: 'Dispensar esta atualização'
-  view-release-notes: 'Ver notas de lançamento'
+  update-available: "Atualização disponível"
+  check-for-updates: "Procurar atualizações"
+  checking-for-updates: "Procurando atualizações..."
+  no-updates: "Sem atualizações"
+  dismiss-update: "Dispensar esta atualização"
+  view-release-notes: "Ver notas de lançamento"
   show-hostname: Mostrar nome do host
   show-container-name: Mostrar nome do container
   shell: Shell
   attach: Anexar
+  inspect: "Inspecionar"
   copy-permalink: Copiar link permanente
   copy-image: "Copiar tag da imagem"
+  image-version: "{image} é atualmente {version}"
+  pin: "Fixar"
+  unpin: "Desafixar"
   copy-logs: Copiar logs
   copy-filtered-logs: Copiar logs filtrados
   copying-logs: Copiando logs...
+  streams: Streams
+  levels: Níveis
+  toggle-all-levels: Alternar todos os níveis
+  all: Todos
+  none: Nenhum
+  section-logs: Logs
+  section-filters: Filtros
+  section-display: Exibição
+  section-export: Exportar
+  section-container: Contêiner
+  section-image: Imagem
+  section-workload: "Carga de trabalho"
 action:
   copy-log: Copiar log
   copy-link: Copiar permalink
   see-in-context: Ver no contexto
+  search-similar: Pesquisar semelhantes
   show-details: Mostrar detalhes
   create-alert: Criar alerta
+  ask-about-log: Perguntar sobre este log
+log-details:
+  on-std: em {std}
+  image: Imagem
+  raw-json: JSON bruto
+  copy: Copiar
+  download: Baixar JSON
+  fields: Campos
+  field: Campo
+  value: Valor
+  fields-hint: Arraste para reordenar. Alterne para mostrar ou ocultar no fluxo de logs.
+  chart-field: "Mostrar {field} em gráfico na Análise SQL"
+  toggle-all: Alternar todos os campos
+  toggle-field: Mostrar ou ocultar no fluxo de logs
+  memory-title: "Novo para este contêiner"
+  memory-explain: "O Dozzle Cloud ainda não tinha visto este padrão neste contêiner. Linhas que diferem apenas em números, IDs ou endereços contam como um único padrão."
+  memory-pattern: "Padrão"
+  memory-first-seen: "Visto pela primeira vez"
+  memory-first-seen-now: "Com esta linha"
+  memory-last-hour: "Última hora"
+  memory-lines: "Nenhuma linha | 1 linha | {count} linhas"
 label:
+  hide-sidebar: "Ocultar a barra lateral"
+  show-sidebar: "Mostrar a barra lateral"
+  host-unreachable: "inacessível"
+  agent-unreachable: "Não foi possível alcançar o agente em {endpoint}"
+  agent-outdated: "agente {version}"
+  historical-at: "Logs históricos · {time}"
   containers: Contêineres
   container: Nenhum container | 1 container | {count} containers
   alert-events: Nenhum evento | 1 evento | {count} eventos
@@ -50,6 +112,7 @@ label:
   event-suppressed-hint: O Dozzle Cloud detetou esta linha mas reteve o alerta
   event-metric: Métrica
   event-container: Container
+  memory-new: "Novo"
   host-count: Nenhum Host | 1 Host | {count} Hosts
   service: Nenhum serviço | 1 serviço | {count} serviços
   services: Serviços
@@ -57,20 +120,35 @@ label:
   all-containers: Todos os Containers
   all-namespaces: Todos
   namespaces: Namespaces
+  owners: Proprietários
   host: Host
   hosts: Hosts
   password: Senha
   username: Usuário
+  or: ou
   container-name: Nome do Container
   status: Status
   created: Criado
-  avg-cpu: Média CPU (%)
-  avg-mem: Média MEM (%)
+  avg-cpu: Média CPU
+  avg-mem: Média memória
   name: Nome
   cpu: CPU
+  core: Sem núcleos | 1 núcleo | {count} núcleos
+  disk: Disco
+  disk-io: "E/S de disco"
+  network: Rede
+  reclaimable: Recuperável
+  unused-images: "Imagens não usadas"
+  unused-volumes: "Volumes não usados"
+  stopped-containers: "Contentores parados"
+  build-cache: "Cache de build"
+  load: Carga
+  uptime: Uptime
   mem: MEM
   pinned: Fixado
   per-page: Linhas por página
+  columns: "Colunas"
+  moving-average: "Usar média móvel"
   sort-by: Ordenar por
   sort-direction: Inverter a ordem
   host-menu: Hosts e Containers
@@ -78,40 +156,78 @@ label:
   k8s-menu: Kubernetes
   group-menu: Grupos Personalizados
   no-logs: O container ainda não tem logs
+  no-logs-hint: "Tudo o que o contêiner escrever aparecerá aqui imediatamente."
   search-status:
     searching: Pesquisando logs mais antigos…
-    searching-to: Pesquisando logs mais antigos… até {time}
-    capped: "{count} correspondências · pesquisado até {time}"
-    exhausted: Todos os logs pesquisados · {count} correspondências
-    empty: Nenhuma correspondência · todos os logs pesquisados
+    matches: "{count} correspondências"
+    searched-all: "Todos os logs pesquisados"
+    scanned-to: "até {time}"
+    empty: "Nenhum log correspondente"
+    empty-hint: "Todos os logs foram pesquisados. Tente outro termo ou limpe a pesquisa."
   show-all-containers: Mostrar todos os containers
   collapse-all: Recolher tudo
   collapse-group: Recolher grupo
   expand-all: Expandir tudo
+  more-options: Mais opções
+  groups: Grupos
 tooltip:
+  memory-new: "O Dozzle Cloud nunca viu este erro neste contêiner. Clique para vê-lo no contexto."
+  memory-new-since: "Visto pela primeira vez neste contêiner: {time}. Clique para ver onde começou."
+  live-logs: Estes logs estão congelados neste momento. Clique para acompanhar a transmissão ao vivo.
   search: Pesquisar containers (⌘ + k, ⌃k)
   pin-column: Fixar como coluna
+  unpin-column: Desafixar coluna
+  merge-stream: Mesclar no fluxo
+  merge-stream-hint: Abra um contêiner para mesclar com ele
+  unmerge-stream: Remover do fluxo
   merge-all: Unir tudo em um fluxo
   network-io: "Rede: ↑ {tx}/s · ↓ {rx}/s"
   disk-io: "Disco: ↑ {write}/s · ↓ {read}/s"
   cpu-usage: "CPU {cpu}% / {cores} núcleos"
   memory-usage: "Memória {used} / {total}"
+  disk-layer: "Camada gravável: {size}"
+  disk-volume-shared: "{name}: {size} (partilhado por {count} contentores)"
+  reclaimable-source: "O mesmo total que {command} indica."
   volumes: Volumes
   volume-unreachable: inacessível a partir deste host
   volume-full: "{destination} está {pct} cheio"
+  open-container-url: "Abrir {url}"
+  agent-version: "Agente Dozzle {version}"
+  agent-version-mismatch: "O agente {version} e o Dozzle {current} estão em versões diferentes. Use a mesma versão em ambos."
+popup:
+  group: Grupo
+  ports: Portas
+container-status:
+  up: "Ativo há {duration}"
+  paused: "Em pausa, ativo há {duration}"
+  restarting: "A reiniciar, parado {time}"
+  exited: "Terminado {time}"
+hint:
+  learn-more: Saiba mais
+  dismiss: Não mostrar novamente
+link-hint:
+  title: Vincular este container
+  description: O Dozzle mostra um link para a interface web de um container quando você adiciona a etiqueta dev.dozzle.url. Adicione isto ao seu arquivo compose e reinicie o container.
+  copy: Copiar
 error:
   page-not-found: Esta página não existe
   host-group-not-found: 'Nenhum host encontrado no grupo "{name}"'
   invalid-auth: Usuário ou senha inválidos
+  oauth-failed: Falha ao entrar. Tente novamente.
   copy-not-supported: Copiar para a área de transferência não é suportado no seu navegador
-  copy-not-supported-hint: Área de transferência indisponível. Copie o link abaixo
+  copy-insecure: Área de transferência bloqueada em http
+  copy-insecure-hint: O seu navegador só permite acesso à área de transferência por https. Copie o texto manualmente.
   logs-skipped: Mostrar {total} entradas ocultas
   container-not-found: Container não encontrado
+  container-not-found-hint: Pode ter sido removido, ou o seu host já não está acessível.
+  nothing-running: "Nada em execução aqui"
+  nothing-running-hint: "Nenhum dos contêineres desta vista está em execução. Os logs aparecem aqui assim que um iniciar."
   action-failed: Ação Falhou
   update-failed: Atualização Falhou
   unable-to-complete-action: Não foi possível completar a ação
   invalid-action: Ação inválida
   unable-to-update: Não foi possível atualizar o container
+  start-container-first: Inicie o container primeiro
   something-went-wrong: Algo deu errado
   unknown-error: Erro desconhecido
   events-stream:
@@ -124,10 +240,9 @@ error:
       A interface do Dozzle atingiu o tempo limite ao conectar-se à API. Verifique a conexão de rede e tente novamente.
 alert:
   image-update:
-    title: 'Atualização disponível'
-    message: 'Uma imagem mais recente foi publicada para {image}.'
+    title: "Atualização disponível"
+    message: "Uma imagem mais recente foi publicada para {image}."
     enable-actions: '<a href="https://dozzle.dev/guide/actions" target="_blank" rel="noreferrer noopener">Ative as ações</a> para baixá-la e recriar o contêiner aqui.'
-    self: 'O Dozzle não pode se atualizar sozinho, reinicie-o para aplicar a atualização.'
   redirected:
     title: Redirecionado para novo container
     message: O Dozzle redirecionou você automaticamente para o novo container {containerId}.
@@ -146,8 +261,11 @@ title:
   settings: Configurações
   notifications: Notificações
 button:
+  back-to-dashboard: Voltar ao painel
+  live-logs: Ir para os logs ao vivo
   logout: Sair
   login: Entrar
+  login-with: Continuar com {provider}
   settings: Configurações
   cancel: Cancelar
   redirect: Redirecionar
@@ -155,52 +273,64 @@ button:
   refresh: Atualizar
 placeholder:
   search-containers: Pesquisar containers (⌘ + k, ⌃k)
+  find-logs: Pesquisar nos logs ou regex
   search: Pesquisar
 settings:
-  show-image-update-alert: 'Mostrar uma notificação quando um contêiner tiver uma atualização'
-  show-image-update-alert-desc: 'Consulta o registro por uma tag mais recente da imagem em execução.'
-  help-support: >
-    Por favor, apoie o Dozzle doando ou nos patrocinando no GitHub. Suas contribuições nos ajudam a melhorar o Dozzle para todos. Obrigado! 🙏🏼
-  about-desc: Informações sobre sua instalação do Dozzle e como apoiar o projeto.
-  display-desc: Personalize a aparência dos logs e do restante do aplicativo. A pré-visualização reflete suas alterações ao vivo.
-  options-desc: Preferências de idioma, navegação e agrupamento.
-  cloud-desc: Transmita logs para o Dozzle Cloud para investigações com IA e busca entre instâncias.
-  support-title: Apoiar o Dozzle
-  support-help: As doações ajudam a manter o Dozzle gratuito e com manutenção contínua. Obrigado 🙏
-  display: Exibição
-  locale: Sobrescrever idioma
-  locale-desc: 'Por padrão segue o idioma do seu navegador.'
-  small-scrollbars: Usar barras de rolagem menores
-  small-scrollbars-desc: 'Barras de rolagem mais finas, úteis em telas menores.'
-  show-timestamps: Mostrar marcas de tempo
-  show-timestamps-desc: 'Prefixa cada linha com o horário em que foi escrita.'
-  soft-wrap: Quebrar linhas automaticamente
-  soft-wrap-desc: 'Quebra linhas longas em vez de rolar na horizontal.'
-  datetime-format: Sobrescrever formato de data e hora
-  datetime-format-desc: 'Por padrão segue o idioma e o relógio do seu navegador.'
-  font-size: Tamanho da fonte para logs
-  font-size-desc: 'Vale apenas para a saída dos logs, não para o resto do app.'
-  color-scheme: Esquema de cores
-  color-scheme-desc: 'Auto segue a configuração do seu sistema.'
-  options: Opções
-  show-stopped-containers: Mostrar containers parados
-  show-stopped-containers-desc: 'Inclui contêineres parados na barra lateral e nas listas.'
-  group-containers: Agrupar containers por namespace
-  group-containers-desc: 'Agrupa por projeto do Compose, stack do Swarm ou dev.dozzle.group.'
-  show-app-icons: 'Mostrar ícones dos aplicativos'
-  show-app-icons-desc: 'Associa imagens conhecidas ao seu logotipo. Os ícones vêm com o Dozzle e nunca são baixados da internet.'
+  subtitle: Preferências para este navegador. As alterações são salvas automaticamente.
+  subtitle-server: "Configurações deste Dozzle, compartilhadas por todos que o usam."
+  appearance: Aparência
+  logs: Logs
+  sidebar: Barra lateral
+  behavior: Comportamento
+  advanced: Avançado
   about: Sobre
-  search: Habilitar pesquisa com Dozzle usando
-  search-desc: 'Busca dentro dos logs do contêiner que você está vendo.'
-  using-version: Você está usando <a href="https://dozzle.dev/" target="_blank" rel="noreferrer noopener">Dozzle</a> {version}.
-  update-available: >-
-    Nova versão disponível! Atualize para <a href="{href}" target="_blank" rel="noreferrer noopener">{nextVersion}</a>.
+  general: Geral
+  updates: Atualizações
+  security: "Segurança"
+  hosts: "Hosts"
+  login-desc: "Quem pode abrir o Dozzle. Sem login, qualquer pessoa que o alcance pode ler seus logs."
+  login-off: "Sem login"
+  login-docs: "Guia de autenticação"
+  set-by-flags: "Neste modo é definido por flags ou variáveis de ambiente."
+  hosts-found: "Neste modo o Dozzle encontra estes hosts sozinho."
+  after-restart: "Após reiniciar"
+  restart-pending: "1 alteração vale após reiniciar | {count} alterações valem após reiniciar"
+  run-setup: "Executar a configuração de novo"
+  run-setup-desc: "Um passo a passo por login, ações, hosts, Dozzle Cloud e atualizações. Tudo nele também está nas Configurações."
+  reset: Restaurar padrões
+  sponsor: Patrocinar
+  new-version: "{version} disponível"
+  update-available: "Está disponível uma imagem mais recente"
+  auto-update-on: "O Dozzle mantém-se atualizado"
+  show-image-update-alert: "Alertas de atualização de imagem"
+  show-image-update-alert-desc: "Avisa quando existe uma tag mais recente de uma imagem em execução."
+  cloud-desc: Transmita logs para o Dozzle Cloud para investigações com IA e busca entre instâncias.
+  locale: Idioma
+  small-scrollbars: Barras de rolagem finas
+  small-scrollbars-desc: "Barras de rolagem mais finas, úteis em telas menores."
+  show-timestamps: Mostrar marcas de tempo
+  show-timestamps-desc: "Mostra quando cada linha foi escrita."
+  soft-wrap: Quebra de linha
+  soft-wrap-desc: "Quebra linhas longas em vez de rolar para o lado."
+  highlight-errors: Destacar linhas de erro
+  highlight-errors-desc: "O marcador colorido de nível é sempre exibido."
+  date-format: "Formato de data"
+  time-format: "Formato de hora"
+  font-size: Tamanho da fonte
+  color-scheme: Tema
+  show-stopped-containers: Mostrar containers parados
+  group-containers: Agrupar containers
+  group-containers-desc: "Por projeto Compose, stack Swarm ou dev.dozzle.group."
+  show-app-icons: "Ícones de apps"
+  show-app-icons-desc: "Incluídos no Dozzle, nunca baixados da internet."
+  search: Pesquisar logs com
+  search-desc: "Substitui a busca do navegador ao visualizar um container."
   show-std: Mostrar rótulos stdout e stderr
-  show-std-desc: 'Indica se a linha veio do stdout ou do stderr.'
-  automatic-redirect: Redirecionar automaticamente para novos containers com o mesmo nome
-  automatic-redirect-desc: 'Quando um contêiner é substituído, seguir para o novo.'
-  compact: Ativar modo compacto para logs
-  compact-desc: 'Reduz o espaçamento entre as linhas para caber mais na tela.'
+  show-std-desc: "Indica se a linha veio do stdout ou do stderr."
+  automatic-redirect: Seguir containers recriados
+  automatic-redirect-desc: "Quando um container é substituído, vá para o novo."
+  compact: Modo compacto
+  compact-desc: "Espaçamento menor para caber mais linhas na tela."
   size:
     small: Pequeno
     medium: Médio
@@ -215,12 +345,12 @@ settings:
     none: Nenhum
   grouping:
     always: Sempre
-    at-least-2: Pelo menos 2
+    at-least-2: "Grupos de 2 ou mais"
     never: Nunca
   hour:
     auto: Auto
-    12: "12"
-    24: "24"
+    "12": "12 horas"
+    "24": "24 horas"
   log:
     preview: Esta é uma prévia dos logs
     warning: Um log de aviso se parece com isto
@@ -235,19 +365,21 @@ releases:
   bugFixes: uma correção de bug | {count} correções
   breaking: uma mudança incompatível | {count} mudanças incompatíveis
   three_parts: "{first}, {second} e {third}"
-  two_parts: "{first} com {second}"
+  two_parts: "{first} e {second}"
   latest: Mais recente
   no_releases: Você tem a versão mais recente
-log_actions:
-  copy_log: Copiar log
-  jump_to_context: Ir para contexto
+  newer: "1 versão mais recente | {count} versões mais recentes"
+  all: Todas as versões
+  updates_summary: "1 container atualizado | {count} containers atualizados"
+  agents_mismatched: "1 agente em uma versão diferente | {count} agentes em uma versão diferente"
 toasts:
   copied:
     title: Copiado
     message: Log copiado para a área de transferência
 analytics:
   creating_table: Criando tabela temporária...
-  downloading: Buscando logs dos containers... ({size})
+  fetching_logs: Buscando logs dos containers
+  loading_engine: Carregando mecanismo SQL
   evaluating_query: Avaliando consulta...
   total_records: Total de {count} registros.
   showing_first: Mostrando os primeiros {count}.
@@ -258,19 +390,98 @@ analytics:
   example_all: Todos os logs
   example_count: Número de linhas
   example_group: Contagem por {column}
+  example_by_container: Por contêiner
+  include_previous: "Incluir 1 contêiner anterior | Incluir {count} contêineres anteriores"
+  containers_count: "{count} contêineres"
   export: Exportar
   export_csv: Baixar CSV
   export_json: Baixar JSON
+  query: Consulta
+  run: Executar
+  results: Resultados
+  min: Mín
+  avg: Média
+  max: Máx
+  p50: P50
+  p95: P95
+  distribution_of: "Distribuição de {column}"
+  rows: 1 linha | {count} linhas
+updates:
+  title: Atualizações
+  count: 1 atualização | {count} atualizações
+  available: 1 atualização disponível | {count} atualizações disponíveis
+  running: Atualizando…
+  subtitle: Estes contêineres usam uma imagem mais antiga do que a do seu registro.
+  subtitle-running: Cada host atualiza um contêiner por vez.
+  none: Todos os contêineres usam a imagem mais recente da sua tag.
+  update-selected: Atualizar | Atualizar 1 | Atualizar {count}
+  self-last: O Dozzle é atualizado por último e depois reinicia.
+  read-only: Atualizar a partir daqui requer as ações de contêiner e a função update.
+  auto: Auto
+  auto-hint: Também atualizado pelo agendamento de atualização automática
+  auto-footnote: Adicione a label {label} a um contêiner para atualizá-lo pelo agendamento de atualização automática.
+  check-only: Tem a label {label}, então é atualizado fora do Dozzle.
+  scheduled-running: A atualização automática agendada está em execução.
+  progress: "{done} de {total} concluídos"
+  back: Voltar
+  busy: Já existe outra atualização em andamento.
+  summary: "{updated} atualizados"
+  summary-failed: "{updated} atualizados, {failed} com falha"
+  status:
+    queued: Na fila
+    pulling: Baixando
+    recreating: Recriando
+    verifying: Verificando
+    done: Atualizado
+    rolled-back: Revertido
+    up-to-date: Em dia
+    error: Falhou
+  release-notes: Notas de versão
+  version:
+    rebuilt: reconstruída
+    unknown: Versão desconhecida ({reason})
+    undeclared: a imagem não declara nenhuma
+    rate-limited: limite de requisições do registro
+    auth: o registro exige login
+    failed: falha na consulta
 drawer:
   maximize: Maximizar
   restore: Restaurar
+terminal:
+  connecting: Conectando
+  connected: Conectado
+  closed: Desconectado
+  connection-closed: Conexão encerrada
+  not-running: O container não está em execução
+  reconnect: Reconectar
+  attaching: Conectando a {name}
+  decrease-font: Diminuir o tamanho da fonte
+  increase-font: Aumentar o tamanho da fonte
+  search: Pesquisar
+  no-results: Nenhum resultado
+  previous-match: Correspondência anterior
+  next-match: Próxima correspondência
+  close-search: Fechar a pesquisa
 notifications:
+  history:
+    title: Atividade
+    loading: A carregar atividade…
+    failed: Não foi possível carregar a atividade.
+    empty: Nada foi acionado recentemente.
+    still-happening: ainda a acontecer
+    events: "{n} eventos"
+    suppressed: "· {n} suprimidos"
+    show-lines: Mostra-me as linhas
+    show-moment: Ver os logs à volta
+    open-in-cloud: Abrir no Dozzle Cloud
+    fired-recently: vezes recentemente
   title: Notificações
   description: Configure onde e quando receber alertas
   destinations: Destinos
   add-destination: Adicionar destino
   alerts: Alertas
   add-alert: Adicionar alerta
+  new-alerts: Novos alertas
   prefill-name: Alertas de erro
   prefill-expression: level == "error"
   add: Adicionar
@@ -279,6 +490,7 @@ notifications:
     enabled: Habilitados ({count})
     paused: Pausados ({count})
   no-alerts: Nenhum alerta configurado ainda. Crie um para começar.
+  no-alerts-in-filter: Nenhum alerta corresponde a este filtro.
   default-alert-created: Criamos um alerta padrão para você. Você será notificado quando um container encerrar com erro. Edite ou pause quando quiser.
   default-alert-failed: Não foi possível criar seu alerta automaticamente. Use o formulário abaixo.
   alert:
@@ -291,54 +503,122 @@ notifications:
     sample-window: Janela de amostragem
     destination: Destino
     dispatcher-deleted: Dispatcher excluído
-    containers-count: "{count} containers"
-    triggered-count: "{count} acionados"
+    containers-count: "em 1 contêiner | em {count} contêineres"
+    triggered-count: "Disparado uma vez | Disparado {count} vezes"
+    never-triggered: Nunca disparado
     last-triggered: "Último: {time}"
+    delete-warning: Excluir este alerta?
+    delete-cancel: Manter
+    delete-confirm: Excluir
+    window-meta: "janela de {duration}"
+    cooldown-meta: "espera de {duration}"
   destination:
     http-webhook: HTTP Webhook
     dozzle-cloud: Dozzle Cloud
     edit: Editar
     duplicate: Duplicar
     delete: Excluir
+    used-by: "Usado por 1 alerta | Usado por {count} alertas"
+    unused: Não usado por nenhum alerta
+    copy-of: "Cópia de {name}"
+    copy-failed: Não foi possível duplicar este destino
+    delete-failed: Não foi possível excluir este destino
+    delete-warning: Excluir este destino?
+    delete-warning-used: "1 alerta envia para cá e deixará de notificar. | {count} alertas enviam para cá e deixarão de notificar."
+    delete-cancel: Manter
+    delete-confirm: Excluir
   alert-form:
     create-title: Criar Alerta
     edit-title: Editar Alerta
-    description: Inscreva-se em eventos de log que correspondam aos seus critérios
+    description-log: Seja notificado quando linhas correspondentes aparecerem nos logs dos seus contêineres
+    description-metric: Seja notificado quando CPU, memória ou disco de um contêiner ultrapassar um limite
+    description-event: Seja notificado quando contêineres iniciarem, pararem, morrerem ou mudarem de saúde
+    required: Obrigatório
+    still-needed: "Ainda falta: {fields}"
+    missing:
+      container-expression: contêineres
+      condition: condição
+      destination: destino
+      name: nome
     alert-name: Nome do Alerta
     alert-name-placeholder: ex., Erros de API de Teste
-    container-filter: Filtro de Container
-    containers-match: "{count} containers correspondem: {names}"
-    no-containers-match: Nenhum container corresponde a este filtro
-    log-filter: Filtro de Log
-    logs-match: "{count} logs correspondem"
-    no-logs-match: Nenhum log corresponde a este filtro
+    alert-name-hint: Aparece no cartão do alerta e em todas as notificações que ele envia.
+    container-filter: Contêineres
+    container-filter-hint: Quais contêineres este alerta observa. Apenas contêineres em execução são considerados.
+    containers-match: "Corresponde a 1 contêiner em execução: {names} | Corresponde a {count} contêineres em execução: {names}"
+    no-containers-match: Nenhum contêiner em execução corresponde a este filtro
+    checking: Verificando…
+    examples: "Exemplos:"
+    use-example: Usar este exemplo
+    seconds-unit: seg
+    log-filter: Condição de log
+    log-filter-hint: Quais linhas de log disparam o alerta.
+    logs-match: "1 linha correspondente nas últimas {window} | {count} linhas correspondentes nas últimas {window}"
+    no-logs-match: Nenhuma linha correspondente nas últimas {window}
+    log-preview-hint: Escreva uma condição para ver quais linhas de log recentes teriam disparado este alerta.
+    log-scan-note: "A pré-visualização percorreu o primeiro contêiner correspondente. | A pré-visualização percorreu os primeiros {count} contêineres correspondentes."
+    preview-needs-containers: Escolha contêineres primeiro para pré-visualizar com dados reais.
+    preview-fix-expression: Corrija a expressão para ver uma pré-visualização.
     destination: Destino
-    select-destination: Selecione um destino
-    no-destinations: Nenhum destino configurado. Adicione um primeiro.
+    no-destinations: Nenhum destino configurado ainda.
     preview: Prévia
     cancel: Cancelar
     save: Salvar
     create: Criar Alerta
-    metric-filter: Expressão de Métrica
-    expression-valid: A expressão é válida
-    metric-fields-hint: "Campos disponíveis: {fields}"
+    discard-title: Descartar este alerta?
+    discard-keep: Continuar editando
+    discard-confirm: Descartar
+    metric-filter: Condição de métrica
+    metric-filter-hint: "Compare cpu (%), memory (%), memoryUsage (bytes) ou o espaço livre de mounts."
+    metric-preview-hint: Escreva uma condição para ver como seus contêineres estão agora.
+    metric-preview-note: Baseado nas últimas {duration} de estatísticas coletadas pelo Dozzle.
+    metric-container: Contêiner
+    metric-cpu: CPU
+    metric-memory: Memória
+    metric-window-match: Janela
+    metric-firing: Dispararia
+    metric-matching-now: Acima agora
+    metric-no-samples: Sem dados
+    metric-no-samples-hint: Nenhuma estatística coletada ainda para os contêineres correspondentes.
+    metric-would-fire: "Dispararia para 1 contêiner agora | Dispararia para {count} contêineres agora"
+    metric-would-not-fire: Nenhum contêiner está acima do limite agora
     sample-window-label: Janela de amostragem
-    sample-window-hint: "O alerta é acionado quando a condição é atendida por {duration}"
+    sample-window-hint: "Dispara quando a condição se mantém por {duration}"
     cooldown-label: Tempo de espera
     cooldown-hint: "{duration} entre alertas por container"
     no-cooldown: Sem tempo de espera
+    immediate-label: "Enviar imediatamente"
+    immediate-hint: "Entrega cada correspondência de imediato, sem a análise do Dozzle Cloud, até ao limite diário de alertas do seu plano."
     alert-type: Tipo de alerta
     log-alert: Alerta de log
     metric-alert: Alerta de métrica
     event-alert: Alerta de evento
-    event-filter: Expressão de evento
-    event-fields-hint: "Campos disponíveis: {fields}"
+    log-alert-description: Filtrar linhas nos logs dos contêineres
+    metric-alert-description: Observar CPU, memória e disco
+    event-alert-description: Reagir a inícios, paradas e mudanças de saúde
+    type-switch-warning: Salvar substitui a condição {type} deste alerta, que será perdida.
+    event-filter: Condição de evento
+    event-filter-hint: Quais eventos de contêiner disparam o alerta.
+    event-matches: "Corresponde a 1 destes eventos | Corresponde a {count} destes eventos"
+    event-matches-none: Não corresponde a nenhum destes eventos
+    event-preview-hint: Escreva uma condição para ver quais eventos de contêiner ela capturaria.
+    event-preview-note: Eventos de exemplo, não histórico. Eventos do Docker são avaliados no momento em que ocorrem.
   destination-form:
     create-title: Adicionar Destino
     edit-title: Editar Destino
     description: Para onde as notificações devem ser enviadas?
     name: Nome
     name-placeholder: ex., Slack de Produção
+    name-hint: Como este destino aparece ao escolher um para um alerta.
+    name-taken: Outro destino já usa este nome.
+    still-needed: "Ainda falta: {fields}"
+    missing:
+      name: nome
+      url: URL do webhook
+      template: modelo
+    discard-title: Descartar este destino?
+    discard-keep: Continuar editando
+    discard-confirm: Descartar
     type: Tipo
     webhook-title: HTTP Webhook
     webhook-description: Slack, Discord, endpoint personalizado
@@ -346,21 +626,37 @@ notifications:
     cloud-description: Notificações push, alertas por email e resumos com IA
     webhook-url: URL do Webhook
     webhook-url-placeholder: https://hooks.foo.com/services/...
+    webhook-url-invalid: Informe uma URL http:// ou https:// completa.
     api-key: Chave API
-    payload-format: Formato do Payload
+    payload-format: Carga
     format-slack: Slack
     format-discord: Discord
     format-ntfy: ntfy
     format-custom: Personalizado
+    format-replace-warning: Isto substitui o modelo que você escreveu.
+    format-replace-confirm: Substituir
     template: Template
     template-hint: Sintaxe de template Go
+    template-placeholder: Corpo JSON com marcadores de modelo Go
+    payload-mode-json: JSON válido. Cada valor é renderizado e escapado para você.
+    payload-mode-raw: Não é JSON, então o corpo inteiro é enviado como texto renderizado.
+    payload-mode-unbalanced: Ação de modelo não fechada.
+    payload-mode-empty: Um modelo vazio envia a notificação completa como JSON.
+    variables: Variáveis disponíveis
+    variables-all: Todos os alertas
+    variables-log: Apenas alertas de log
+    variables-metric: Apenas alertas de métrica
+    variables-event: Apenas alertas de evento
+    variables-scope-hint: Campos fora de "Todos os alertas" só existem para o próprio tipo; usar um em outro falha no envio.
     headers: Cabeçalhos Personalizados
     headers-hint: Cabeçalhos HTTP opcionais (ex. Authorization)
     header-name: Nome do cabeçalho
     header-value: Valor do cabeçalho
     add-header: Adicionar Cabeçalho
+    remove-header: Remover cabeçalho
     test: Testar
     test-success: Teste bem-sucedido
+    test-unsupported: "Este modelo falha para alertas {kinds}, então eles não serão enviados para cá."
     cancel: Cancelar
     close: Fechar
     save: Salvar
@@ -368,13 +664,10 @@ notifications:
     cloud-exists: Dozzle Cloud já está vinculado
     link-cloud: Vincular Conta
     link-cloud-button: Vincular Dozzle Cloud
-    cloud-settings-hint: Para configurar seus canais gerenciados, vá para
     cloud-settings-link: Configurações do Dozzle Cloud
     cloud-checking: Verificando status da nuvem...
     cloud-relink: Sua chave API é inválida ou expirou. Por favor, exclua e vincule sua conta novamente.
     cloud-unavailable: O Dozzle Cloud está temporariamente indisponível. Tente novamente mais tarde.
-    cloud-plan: Plano
-    cloud-usage: Eventos neste período
   empty-state:
     title: Comece com as notificações
     description: Escolha como você deseja receber alertas quando seus containers precisarem de atenção.
@@ -386,12 +679,20 @@ notifications:
 cloud:
   title: Dozzle Cloud
   description: Controle seus containers remotamente e use IA para investigar problemas em todo o seu cluster.
+  pitch:
+    findings: Varredura diária com IA dos seus erros e avisos
+    alerts: Alertas em tempo real para falhas e limites
+    control: Inicie, pare e inspecione containers de qualquer lugar
   learn-more: Saiba mais
   link-instance: Vincular instância
   relink-instance: Revincular instância
   connected: Conectado
+  pro-badge: Dozzle Cloud Pro
+  locked-on-this-plan: Disponível com o Dozzle Cloud Pro
   plan: Plano
-  usage: Eventos neste período
+  usage: Eventos
+  usage-agent-messages: Conversas com o agente
+  usage-log-bytes: Dados indexados
   dashboard: Painel
   settings: Configurações
   error: Erro de conexão. Por favor, revincule sua instância.
@@ -399,6 +700,7 @@ cloud:
   unlink: Desvincular
   unlink-confirm: Tem certeza de que deseja desvincular do Dozzle Cloud? Isso removerá todos os destinos de notificação na nuvem.
   privacy:
+    details-link: "O que é enviado"
     toggle: "Transmitir logs e métricas para o Dozzle Cloud"
     sends-heading: "Enquanto isso estiver ativado, seus contêineres enviam continuamente:"
     sends-logs: "Linhas de log, à medida que são escritas"
@@ -406,7 +708,7 @@ cloud:
     never-heading: "Nunca é enviado:"
     never-env: "Variáveis de ambiente"
     off-note: "Desative para manter os logs e as métricas nesta instância. Os alertas que você configurou continuam sendo entregues e o acesso remoto aos contêineres continua funcionando."
-    per-container: "Exclua um contêiner específico com o rótulo: dev.dozzle.cloud.min_level=disabled"
+    per-container: "Interrompa os logs de um contêiner específico com o rótulo: dev.dozzle.cloud.min_level=disabled"
     required-for: "Necessário para investigações com IA, busca em logs e histórico de recursos."
   welcome:
     watching-title: "O Cloud vigia os seus logs para não ter de o fazer"
@@ -434,10 +736,12 @@ cloud:
     alerts-go-to: "Os alertas vão para"
     your-cloud-account: "a sua conta Cloud"
     change: "Alterar"
+    chat-also: "Receba também no celular pelo Telegram ou Discord."
+    chat-connect: "Conectar"
     turn-on: "Ativar 1 alerta | Ativar {count} alertas"
     turn-on-short: "Ativar"
     continue-without: "Continuar sem alertas"
-    skip-alerts: "Agora não, envie apenas as investigações diárias"
+    skip-alerts: "Agora não"
     ready: "Pronto"
     done-title: "Está tudo preparado"
     done-body: "É aqui que aparece cada tipo de notificação."
@@ -451,19 +755,101 @@ cloud:
     where-tuning: "Ajuste por contentor"
     where-tuning-detail: "Restrinja, silencie ou elimine qualquer regra na página de Notificações."
     done: "Concluído"
+    steps:
+      watching: "O que o Cloud faz"
+      alerts: "Alertas em tempo real"
+      done: "Onde tudo aparece"
     signals:
       exited: "Contentor terminou com erro"
       unhealthy: "Contentor ficou unhealthy"
       oom: "Terminado pelo kernel (OOM)"
       restart: "Contentor reiniciado"
+      updated: "Contentor atualizado pelo Dozzle"
       cpu: "CPU acima de 90% durante 5 minutos"
       memory: "Memória acima de 90% durante 5 minutos"
       disk: "Volume acima de 85% cheio"
       disk-free: "Volume com menos de 1 GB livre"
       fatal: "Qualquer linha fatal"
       error: "Qualquer linha de erro"
+cloud-rail:
+  title: Dozzle Cloud
+  chat: Perguntar ao Dozzle
+  metrics: Métricas
+  alerts: Alertas
+  close: Fechar
+  hide: Ocultar a barra do cloud
+  show: Mostrar a barra do cloud
+  alerts-empty-here: Nada disparou no que você está vendo.
+  all-activity: Toda a atividade
+  metrics-no-container: Abra um contêiner para ver o histórico dele.
+  metrics-loading: Carregando o histórico…
+  metrics-failed: Não foi possível carregar o histórico.
+  metrics-empty: Nada registrado para este intervalo ainda.
+  metrics-peak: pico
+  metrics-bucket: médias de {duration}
+  window-1h: 1 h
+  window-6h: 6 h
+  window-24h: 24 h
+  window-7d: 7 d
+cloud-chat:
+  title: Perguntar ao Dozzle
+  close: Fechar
+  clear: Limpar a conversa
+  empty: Pergunta sobre o que estás a ver. O assistente vê esta vista e lê estes logs.
+  thinking: A pensar…
+  doing:
+    logs: Lendo os logs…
+    containers: Verificando os contêineres…
+    stats: Verificando o uso de recursos…
+    inspect: Inspecionando o contêiner…
+    notifications: Verificando as notificações…
+    action: Executando a ação…
+    working: Trabalhando…
+  step:
+    logs: Pesquisando nos logs
+    containers: Analisando contêineres
+    stats: Verificando uso de recursos
+    inspect: Inspecionando o contêiner
+    alerts: Revisando alertas
+    findings: Revisando descobertas
+    events: Verificando o histórico do contêiner
+    docs: Lendo a documentação
+    notifications: Verificando notificações
+    action: Executando a ação
+  phase:
+    reading: Lendo a pergunta
+    reviewing: Analisando o que encontrou
+    writing: Escrevendo a resposta
+    retrying: Demorando mais que o normal, tentando de novo
+  found: "{n} encontrados"
+  nothing-found: nada encontrado
+  worked-for: Trabalhou {time}
+  earlier: "{n} anteriores"
+  placeholder: Perguntar sobre estes logs
+  historical: histórico
+  n-containers: "{n} contentores"
+  evidence: Enviado com a sua pergunta
+  lines-in-view: "{n} linhas à vista"
+  this-log: Esta linha de log
+  remove-log: Remover esta linha de log
+  send: Enviar
+  suggest-summarize: Resuma o que está acontecendo
+  suggest-errors: Encontre os erros e avisos
+  suggest-next: O que devo verificar em seguida?
+  error-unavailable: O assistente está indisponível no momento.
+  error-not-configured: O Dozzle Cloud não está vinculado, então não há assistente para perguntar.
+  section-ask: Assistente
+  ask-for: Perguntar ao Dozzle sobre {query}
+  ask-hint: Responde a partir dos contentores à vista
+  ask-shortcut: para perguntar
 cloud-search:
   containers-section: "Containers"
+  section-logs: "Logs"
+  no-matches: "Nenhum container ou comando corresponde"
+  nav-hint: "navegar"
+  pin-shortcut: "fixar coluna"
+  merge-shortcut: "mesclar no fluxo"
+  unmerge-shortcut: "remover do fluxo"
   search-logs-for: 'Buscar logs por "{query}"'
   across-containers: "indexados em todos os seus containers"
   connect-to-enable: "Conectar Dozzle Cloud para buscar logs"
@@ -471,27 +857,26 @@ cloud-search:
   open-container: "abrir container"
   search-logs-shortcut: "buscar logs"
   cloud-connected: "Cloud conectado"
+  cloud-error: "Erro de conexão com o Cloud"
   results-page-title: "Busca de logs"
   no-results: "Nenhuma linha de log correspondente."
   search-failed: "Falha na busca da Cloud."
   search-empty-prompt: "Digite uma consulta para buscar nos logs."
   searching: "Buscando…"
   hits-count: "{n} resultados"
-  window-suffix: "nos últimos 14 dias"
+  window-since: "desde {time}"
   hero-title-cloud: "Buscar containers e logs"
   hero-title-plain: "Buscar containers"
   hero-pill-indexed: "Índice Cloud"
   modal-placeholder-cloud: "Buscar containers e logs…"
   modal-placeholder-plain: "Buscar containers…"
-  col-time: "Hora"
-  col-level: "Nível"
-  col-container: "Container"
-  col-message: "Mensagem"
   container-removed: "O container foi excluído"
   cta-settings: "Configurações da Cloud"
   container-removed-pill: "removido"
 command-palette:
   section-commands: Comandos
+  section-recent: "Recentes"
+  run-hint: "executar comando"
   restart-container: Reiniciar {name}
   stop-container: Parar {name}
   start-container: Iniciar {name}
@@ -506,3 +891,349 @@ command-palette:
   toggle-std: Alternar rótulos stdout/stderr
   toggle-scrollbars: Alternar barras de rolagem menores
   open-settings: Abrir configurações
+  section-updates: "Atualizações disponíveis"
+  section-hosts: "Hosts"
+  open-analytics: "Abrir análise de logs"
+  clear-logs: "Limpar logs"
+  attach-shell: "Anexar a {name}"
+  exec-shell: "Abrir um shell em {name}"
+  open-assistant: "Perguntar ao assistente"
+  check-container-updates: "Verificar atualizações de {name}"
+  skip-update: "Ignorar esta atualização de {name}"
+  review-updates: "Revisar 1 atualização | Revisar {count} atualizações"
+  confirm-stop: "Pressione ↵ novamente para parar {name}"
+  confirm-update: "Pressione ↵ novamente para atualizar {name}"
+  confirm-hint: "confirmar"
+  open-settings-page: "Configurações: {page}"
+  open-notifications: "Abrir notificações"
+  open-logs: "Abrir logs"
+  state-on: "Ligado"
+  state-off: "Desligado"
+  prefix-commands: "comandos"
+  prefix-hosts: "hosts"
+  prefix-ask: "perguntar"
+  actions-hint: "ações"
+  actions-placeholder: "Filtrar ações…"
+  back-hint: "voltar"
+setup:
+  title: Configurar o Dozzle
+  next: Próximo
+  back: Voltar
+  finish-later: Terminar depois
+  close: Fechar
+  copy: Copiar
+  steps:
+    login: Login
+    login-note: Faça isto primeiro
+    actions: Ações e shell
+    cloud: Dozzle Cloud
+    cloud-note: Opcional
+    hosts: "Hosts"
+    hosts-note: "Opcional"
+    update: "Atualização automática"
+    update-note: "Requer ações"
+    restart: Reiniciar
+  login:
+    title: Ativar login
+    subtitle: Qualquer pessoa que acesse o Dozzle pode ler seus logs. Proteja-o antes de qualquer outra coisa.
+    no-data-title: /data não está montado
+    no-data-body: Usuários e configurações são salvos em /data. Sem um volume, eles somem na próxima vez que o contêiner for recriado. Monte um e verifique novamente.
+    check-again: Verificar novamente
+    tab-account: Conta do Dozzle
+    tab-proxy: Meu proxy
+    tab-oidc: OIDC
+    username: Nome de usuário
+    email: E-mail
+    optional: (opcional)
+    password: Senha
+    confirm: Confirmar senha
+    password-hint: Pelo menos 8 caracteres. Letras, números, pontos, hífens e sublinhados no nome de usuário.
+    mismatch: As senhas não coincidem.
+    saved-volume: Salvo em um volume montado
+    after-restart: O login é ativado após reiniciar
+    on: O login está ativado
+    users-exist: Já existe um users.yml. Defina o provedor de autenticação como simple para usá-lo.
+    create-account: Criar conta
+    proxy-body: Authelia, Authentik, Cloudflare Access e similares autenticam os usuários e depois passam o nome de usuário ao Dozzle no cabeçalho Remote-User.
+    proxy-warning-title: Publique apenas o proxy
+    proxy-warning-body: O Dozzle confia nesse cabeçalho vindo de qualquer um. Se a porta dele estiver acessível, qualquer pessoa pode se passar por qualquer usuário.
+    proxy-docs: Guia de forward proxy
+    use-proxy: Usar meu proxy
+    oidc-body: O OIDC precisa de um client secret, então nada é salvo aqui. Adicione isto ao seu arquivo compose e recrie o contêiner.
+    oidc-docs: Guia de OpenID Connect
+    skip: "Continuar sem login"
+    manual-restart: O Dozzle não consegue se reiniciar aqui. Reinicie o contêiner para ativar o login, ou defina isto no seu arquivo compose.
+    restart-hint: Você chegará à página de login. A configuração continua depois que você entrar.
+  actions:
+    title: Ações e shell
+    subtitle: Decida o que o Dozzle pode fazer com seus contêineres.
+    example-status: Encerrado (1) há 2 minutos
+    example-restart: Reiniciar
+    example: "Exemplo"
+    actions-label: Iniciar, parar e reiniciar
+    actions-desc: Corrija um contêiner que travou na mesma página em que você encontrou o erro.
+    shell-label: Shell
+    shell-desc: Conecte-se a um contêiner ou execute comandos dentro dele.
+    shell-warning: Acesso ao shell de um contêiner muitas vezes equivale a acesso ao host. Deixe desativado a menos que precise.
+    locked: "Definido por {env}"
+    window-closed: "Sem login, a configuração só aceita alterações nos primeiros 15 minutos de uma instalação nova. Defina isto com variáveis de ambiente ou ative o login primeiro."
+    window-closed-env: "Sem login, a configuração só aceita alterações nos primeiros 15 minutos de uma instalação nova. Defina {envs} no seu arquivo compose ou ative o login primeiro."
+    no-access: Sua conta não pode alterar estas configurações.
+    restart-note: Estas alterações entram em vigor depois que o Dozzle reiniciar.
+  hosts:
+    title: "Adicionar outro host"
+    subtitle: "Veja os contêineres das suas outras máquinas neste Dozzle. Execute um agente em cada uma e adicione aqui o endereço dele."
+    run-title: "Executar o agente"
+    run-body: "Na outra máquina, adicione isto a um arquivo compose e inicie-o. Mantenha a porta 7007 numa rede privada."
+    custom-cert: "Este Dozzle usa um certificado próprio, então o agente precisa do mesmo par ou recusará a conexão."
+    cert-docs: "Guia de certificados"
+    connect-title: "Conectar"
+    address: "Endereço"
+    name: "Nome"
+    optional: "(opcional)"
+    add: "Adicionar host"
+    connect-note: "O Dozzle conecta antes de salvar. O host aparece na hora, sem reiniciar."
+    added: "{name} está conectado."
+    list-title: "Agentes"
+    connected: "Conectado"
+    offline: "Não conectado"
+    remove: "Remover"
+    skip: "Agora não"
+    error-exists: "Esse agente já foi adicionado."
+    error-duplicate: "Essa máquina já está conectada como outro host. Se este agente compartilha o mesmo Docker engine, dê a ele um DOZZLE_HOST_ID próprio."
+    error-connect: "Não foi possível conectar ao agente: {reason}"
+    error-cert: "O agente tem um certificado diferente deste Dozzle. Copie o trecho de novo, atualize o agente e recrie-o."
+    error-cert-custom: "O agente não tem o certificado personalizado deste Dozzle. Dê ao agente os mesmos arquivos de certificado e chave e recrie-o."
+    error-unsupported-mode: "Neste modo não é possível adicionar ou remover hosts aqui."
+    error-invalid: "Esse endereço ou nome não é válido."
+    error-rate-limited: "Tentativas demais. Aguarde um minuto e tente de novo."
+    error-env-agent: "Este agente está definido com DOZZLE_REMOTE_AGENT, então só pode ser removido lá."
+    error-not-found: "Esse agente não está mais na lista."
+    error-custom-cert: "Este Dozzle já usa um certificado personalizado, então não há certificado privado para criar."
+    private-label: "Certificado privado"
+    private-desc: "Só este Dozzle pode se conectar ao agente. Os outros agentes não mudam."
+    private-warning: "Este trecho contém uma chave privada. Trate-a como uma senha."
+    private-pill: "privado"
+    private-error: "Não foi possível criar um certificado privado, então o compartilhado é usado. {reason}"
+    private-missing: "Este Dozzle ainda não tem certificado privado. Ative Certificado privado de novo e tente outra vez."
+  cloud:
+    title: Conectar o Dozzle Cloud
+    subtitle: Saiba quando algo quebrar sem precisar manter uma aba aberta.
+    alerts-title: Alertas no momento em que algo quebra
+    alerts-body: "Falhas, encerramentos por OOM e picos de erros, enviados para Telegram, Discord, Slack ou e-mail."
+    chat-title: "Pergunte o que quebrou pelo celular"
+    chat-body: "Mande uma mensagem ao bot do Telegram ou Discord. Ele lê seus logs e, com as ações ativadas, reinicia um contêiner depois que você confirma."
+    updates-title: "Atualizações verificadas"
+    updates-body: "Depois de cada atualização automática, o Dozzle Cloud compara os erros com os de antes e oferece reverter se eles aumentaram."
+    connect: Conectar o Dozzle Cloud
+    learn-more: Saiba mais
+    skip: "Agora não"
+  update:
+    pill-on: "Usa ações · ativado"
+    pill-pending: "Ativa junto com as ações"
+    title: "Mantenha os contêineres atualizados"
+    subtitle: "Em um horário tranquilo, o Dozzle procura imagens mais novas e atualiza a si mesmo e os contêineres que você escolher. Configurações, usuários e alertas continuam."
+    auto-label: "Atualizar automaticamente"
+    auto-desc: "Verifica se há imagens mais novas e atualiza o Dozzle e os contêineres abaixo quando houver."
+    when-label: "Quando"
+    time-label: "Horário"
+    server-time: "Usa o fuso horário do servidor."
+    daily: "Diariamente"
+    weekly: "Semanalmente, aos domingos"
+    version-label: "Versão"
+    update-now: "Atualizar agora"
+    pulling: "Baixando a nova imagem"
+    up-to-date: "O Dozzle já está atualizado."
+    restarting: "O Dozzle está se substituindo pela nova versão."
+    restarting-hint: "A página recarrega assim que a nova versão responder."
+    needs-actions: "Atualizar agora funciona quando as ações estiverem ativadas, após o reinício."
+    reason-pinned-tag: "Você usa uma tag de versão fixa, então não há nada mais novo para baixar. Use uma tag como latest para receber atualizações."
+    reason-unsupported: "O Dozzle não encontra o próprio contêiner aqui, então não consegue se substituir."
+    reason-swarm-worker: "O Dozzle está rodando como serviço do Swarm em um nó worker. Só um manager pode atualizar o serviço, então rode o Dozzle em um manager ou atualize-o com docker service update."
+    pull-denied: "Não foi possível baixar {image}. Talvez exista apenas nesta máquina ou o registro exija docker login."
+  restart:
+    title: Reiniciar o Dozzle
+    subtitle: Estas alterações foram salvas e passam a funcionar após reiniciar.
+    change-auth: Login
+    "on": "Ativado"
+    "off": "Desativado"
+    button: Reiniciar o Dozzle
+    restarting: Reiniciando o Dozzle
+    restarting-hint: A página recarrega assim que o Dozzle voltar.
+    slow-title: Isto está demorando um pouco
+    slow-body: O Dozzle ainda não voltou. Verifique o contêiner e depois recarregue.
+    reload: Recarregar
+    manual: O Dozzle não consegue se reiniciar aqui. Reinicie o contêiner, ou defina isto no seu arquivo compose.
+    done-title: Tudo pronto
+    done-body: Nada precisa ser reiniciado. Você pode voltar aqui pelas Configurações a qualquer momento.
+    nothing-title: "Nada para reiniciar"
+    nothing-body: "Nenhuma etapa foi configurada desta vez. Abra a configuração em Configurações quando quiser."
+    done: Concluído
+  error:
+    generic: Algo deu errado. Tente novamente.
+    load: Não foi possível carregar a configuração. Tente novamente mais tarde.
+    conflict: Isto já está definido, ou fixado por uma variável de ambiente.
+    no-data: /data não está montado, então não é possível salvar isto.
+    window-closed: "Sem login, a configuração só aceita alterações nos primeiros 15 minutos de uma instalação nova. Ative o login com variáveis de ambiente."
+mcp-authorize:
+  title: "Autorizar cliente MCP"
+  subtitle: "{client} quer usar o Dozzle em seu nome."
+  unnamed-client: "Um cliente sem nome"
+  redirect-label: "Envia você de volta para"
+  access-label: "Acesso"
+  access-value: "Ler contêineres, logs e estatísticas"
+  user-label: "Conectado como"
+  hint: "Permita apenas um cliente que você mesmo acabou de conectar e confira se o endereço acima é o esperado."
+  allow: "Permitir"
+  deny: "Negar"
+  return: "Voltar ao cliente"
+  redirecting: "Voltando ao cliente. Você pode fechar esta aba quando terminar."
+  failed: "Não foi possível concluir esta solicitação."
+mobile-nav:
+  label: "Principal"
+  home: "Início"
+  browse: "Explorar"
+  back: "Voltar"
+time-range:
+  title: "Intervalo de tempo"
+  live: "Ao vivo"
+  last-15m: "Últimos 15 minutos"
+  last-1h: "Última hora"
+  last-6h: "Últimas 6 horas"
+  last-24h: "Últimas 24 horas"
+  custom: "Intervalo personalizado"
+  from: "De"
+  to: "Até"
+  keep-following: "Continuar acompanhando"
+  volume: "Volume de logs"
+  errors: "Erros"
+  bucket: "{lines} linhas · {errors} erros"
+  not-scanned: "não lido"
+  invalid: "O fim precisa ser depois do início."
+  show: "Mostrar logs"
+  edge-start: "Desde"
+  edge-end: "Até"
+  show-earlier: "mostrar antes"
+  show-later: "mostrar depois"
+  to-now: "até agora"
+  shift-earlier: "Janela anterior"
+  shift-later: "Próxima janela"
+  last-short: "Últimos {span}"
+  since-short: "Desde {time}"
+  custom-hint: "Escolha os dias e depois os horários. Horários em {zone}."
+  keep-following-hint: "Deixe o fim em aberto e continue mostrando linhas novas."
+  previous-month: "Mês anterior"
+  next-month: "Próximo mês"
+  empty-range: "Nenhum log neste intervalo"
+  empty-range-hint: "Nada foi escrito entre {from} e {to}."
+  empty-since: "Nenhum log desde {time}"
+  empty-since-hint: "Linhas novas aparecem aqui assim que são escritas."
+  jump-before: "Linhas anteriores · {time}"
+  jump-after: "Linhas seguintes · {time}"
+  empty-window: "Nenhum log nesta janela"
+update-marker:
+  updated: "Atualizado"
+  rolled-back: "Revertido"
+  undone: "Atualização desfeita"
+  roll-back: "Reverter"
+  by:
+    schedule: "pelo agendamento de atualizações"
+    dozzle: "pelo Dozzle"
+    cloud: "pelo Dozzle Cloud"
+  verdict:
+    pending: "O Dozzle Cloud está acompanhando esta atualização"
+    clean: "Parece normal"
+    regressed: "Parece quebrada"
+    unsure: "Pode ter um problema"
+    rolled_back_by_dozzle: "O Dozzle restaurou o contêiner anterior"
+  decision:
+    rolled_back: "Revertida"
+    kept: "Mantida"
+auto-update:
+  which-label: "Quais contêineres"
+  mode-off: "Só o Dozzle"
+  mode-off-desc: "Os outros contêineres são verificados e esperam você atualizá-los."
+  mode-all: "Tudo"
+  risky: "{count} contêiner guarda dados em um volume nomeado. Um banco de dados pode ir para uma versão que não lê seus dados. | {count} contêineres guardam dados em volumes nomeados. Um banco de dados pode ir para uma versão que não lê seus dados."
+  containers-still: "Os outros contêineres continuam sendo atualizados neste horário."
+  needs-actions: "Nada é atualizado sozinho enquanto as ações de contêiner estiverem desligadas."
+  containers: "Contêineres"
+  status-current: "Atualizado"
+  status-available: "Atualização disponível"
+  status-pending: "Ainda não verificado"
+  status-off: "Não verificado"
+  status-pinned: "Fixado em um digest"
+  status-local: "Construído localmente"
+  status-private: "Registro privado"
+  status-unknown: "Não dá para verificar"
+  safety-title: "Rede de segurança"
+  safety-verify: "Cada atualização é acompanhada e revertida se o novo contêiner falhar."
+  safety-cleanup: "A imagem antiga é removida depois. Uma imagem anterior é mantida para reverter."
+  safety-skip: "Imagens fixadas em um digest, construídas localmente ou de um registro privado sem credenciais são ignoradas."
+  learn-more: "Como funciona a atualização automática"
+  footnote: "{link} decide quais contêineres se atualizam sozinhos."
+  footnote-link: "Configurações → Atualizações"
+  mode-labelled: "Contêineres com rótulo"
+  mode-labelled-desc: "Mais os contêineres com o rótulo {label}."
+  mode-all-desc: "Todos os contêineres, exceto os que têm o rótulo {label}."
+  risky-hint: "Adicione o rótulo {label} a um contêiner para deixá-lo de fora."
+  empty: "Nenhum contêiner se atualiza sozinho. Adicione o rótulo {label} a um contêiner para incluí-lo."
+inspect:
+  overview: "Visão geral"
+  ports: "Portas"
+  mounts: "Montagens"
+  env: "Ambiente"
+  labels: "Labels"
+  id: "ID"
+  command: "Comando"
+  created: "Criado"
+  started: "Iniciado"
+  finished: "Finalizado"
+  restart-policy: "Política de reinício"
+  network: "Rede"
+  memory-limit: "Limite de memória"
+  cpu-limit: "Limite de CPU"
+  unlimited: "Ilimitado"
+  oom-killed: "Encerrado por OOM"
+  exit-code: "Saída {code}"
+  restarts: "Reinícios: {count}"
+  show-value: "Mostrar valor"
+  hide-value: "Ocultar valor"
+  env-hidden: "Os valores estão ocultos. Lê-los requer acesso ao shell."
+  load-failed: "Não foi possível carregar os detalhes do contêiner."
+  networks: "Redes"
+  container-count: "1 contêiner | {count} contêineres"
+  subnet: "Sub-rede"
+  gateway: "Gateway"
+  ip-usage: "IPs em uso"
+  connected-containers: "Contêineres conectados"
+  this-container: "este contêiner"
+  driver: "Driver"
+  scope: "Escopo"
+  driver-options: "Opções do driver"
+  mounted-by: "Montado por"
+  details-failed: "Não foi possível carregar os detalhes."
+  size: "Tamanho"
+  mountpoint: "Ponto de montagem"
+reclaim:
+  clean-up: "Limpar"
+  free-up: "Liberar {size}"
+  confirm-title: "Liberar {size} em {host}?"
+  cannot-undo: "Isto não pode ser desfeito."
+  images-repull: "Um stack parado baixa suas imagens de novo na próxima vez que iniciar."
+  volumes-warning: "1 volume guarda dados que nenhum contêiner usa agora. Apagá-lo elimina esses dados, como um banco de dados cujo contêiner foi removido. | {count} volumes guardam dados que nenhum contêiner usa agora. Apagá-los elimina esses dados, como um banco de dados cujo contêiner foi removido."
+  volumes-confirm: "Entendo, apagar os volumes"
+  delete: "Apagar"
+  deleting: "Liberando {size}…"
+  freed: "{size} liberados"
+  failed: "A limpeza falhou"
+  agent-too-old: "Este agente ainda não consegue limpar. Atualize-o para a versão mais recente."
+  preview-note: "A limpeza verifica de novo quando é executada, então o que deixar de ser usado até lá também será apagado."
+  preview-failed: "Não foi possível listá-los."
+  preview-agent-too-old: "Atualize este agente para ver a lista."
+  enable-actions: "Ative as ações de contêiner para limpar a partir daqui."
+  schedule-label: "Limpar automaticamente"
+  scheduled-run: "Limpeza agendada"
+  schedule-desc: "Imagens não usadas, containers parados e cache de build em todos os hosts. Volumes nunca são apagados."
+  last-run: "A última execução liberou {size} {when}."
+  last-run-failed: "{count} host não pôde ser limpo, veja os logs. | {count} hosts não puderam ser limpos, veja os logs."

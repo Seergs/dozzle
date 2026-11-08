@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,16 +15,19 @@ import (
 	"github.com/amir20/dozzle/internal/auth"
 	"github.com/amir20/dozzle/internal/cloud"
 	"github.com/amir20/dozzle/internal/container"
+	"github.com/amir20/dozzle/internal/container/docker"
+	"github.com/amir20/dozzle/internal/hostservice"
 	"github.com/amir20/dozzle/internal/notification"
-	docker_support "github.com/amir20/dozzle/internal/support/docker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var (
-	devContainer  = container.Container{ID: "dev123", Name: "dev-allowed", State: "running", Labels: map[string]string{"env": "dev"}}
-	prodContainer = container.Container{ID: "prod456", Name: "prod-secret", State: "running", Labels: map[string]string{"env": "prod"}}
+	devContainer  = container.Container{ID: "dev123", Host: "localhost", Name: "dev-allowed", State: "running", Labels: map[string]string{"env": "dev"}}
+	prodContainer = container.Container{ID: "prod456", Host: "localhost", Name: "prod-secret", State: "running", Labels: map[string]string{"env": "prod"}}
 	devLabels     = container.ContainerLabels{"env": []string{"dev"}}
 )
 
@@ -40,10 +44,12 @@ func restrictedHandler(t *testing.T) *handler {
 	client.On("FindContainer", mock.Anything, "prod456").Return(prodContainer, nil)
 	client.On("ContainerLogsBetweenDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(io.NopCloser(strings.NewReader("")), nil)
+	client.On("ContainerLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(io.NopCloser(strings.NewReader("")), io.EOF)
 
-	manager := docker_support.NewRetriableClientManager(nil, 3*time.Second, tls.Certificate{}, docker_support.NewDockerClientService(client, container.ContainerLabels{}))
+	manager := hostservice.NewRetriableClientManager(nil, nil, 3*time.Second, tls.Certificate{}, docker.NewService(client, container.ContainerLabels{}))
 	return &handler{
-		hostService: docker_support.NewMultiHostService(manager, 3*time.Second),
+		hostService: hostservice.NewMultiHostService(manager, 3*time.Second),
 		config:      &Config{Base: "/", Authorization: Authorization{Provider: SIMPLE}},
 	}
 }
@@ -75,9 +81,50 @@ func Test_debugStore_respects_user_labels(t *testing.T) {
 	assert.Equal(t, "dev-allowed", body.Containers[0].Name)
 }
 
+func Test_cloudSearchLogs_withholds_volume_from_restricted_users(t *testing.T) {
+	h := restrictedHandler(t)
+	var asked bool
+	h.config.Cloud.SearchLogs = func(ctx context.Context, query string, limit int32, hostID, containerID string, before int64, volume, regex bool) (*cloud.SearchLogResult, error) {
+		asked = volume
+		return &cloud.SearchLogResult{
+			Volume: []cloud.SearchVolumeBucket{{TimestampNs: 1, Level: "info", Count: 9}},
+			StepNs: 1,
+			Total:  new(int64(9)),
+		}, nil
+	}
+	h.hostService = &cloudLinkedService{HostService: h.hostService, cc: &notification.CloudConfig{APIKey: "key"}}
+
+	rr := httptest.NewRecorder()
+	h.cloudSearchLogs(rr, asRestrictedUser(httptest.NewRequest(http.MethodGet, "/api/cloud/search/logs?q=x&volume=1", nil)))
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.False(t, asked, "a restricted caller's search must not ask Cloud for instance-wide counts")
+	var result cloud.SearchLogResult
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &result))
+	assert.Empty(t, result.Volume)
+	assert.Nil(t, result.Total, "the total counts the whole instance too")
+}
+
+func Test_cloudSearchLogs_forwards_regex_intent(t *testing.T) {
+	h := restrictedHandler(t)
+	var got []bool
+	h.config.Cloud.SearchLogs = func(ctx context.Context, query string, limit int32, hostID, containerID string, before int64, volume, regex bool) (*cloud.SearchLogResult, error) {
+		got = append(got, regex)
+		return &cloud.SearchLogResult{}, nil
+	}
+	h.hostService = &cloudLinkedService{HostService: h.hostService, cc: &notification.CloudConfig{APIKey: "key"}}
+
+	for _, url := range []string{"/api/cloud/search/logs?q=x", "/api/cloud/search/logs?q=x&regex=1"} {
+		rr := httptest.NewRecorder()
+		h.cloudSearchLogs(rr, asRestrictedUser(httptest.NewRequest(http.MethodGet, url, nil)))
+		require.Equal(t, http.StatusOK, rr.Code)
+	}
+	assert.Equal(t, []bool{false, true}, got)
+}
+
 func Test_cloudSearchLogs_drops_out_of_scope_hits(t *testing.T) {
 	h := restrictedHandler(t)
-	h.config.Cloud.SearchLogs = func(ctx context.Context, query string, limit int32, hostID, containerID string, before int64) (*cloud.SearchLogResult, error) {
+	h.config.Cloud.SearchLogs = func(ctx context.Context, query string, limit int32, hostID, containerID string, before int64, volume, regex bool) (*cloud.SearchLogResult, error) {
 		return &cloud.SearchLogResult{Hits: []cloud.SearchLogHit{
 			{ContainerID: "dev123", ContainerName: "dev-allowed", Message: "hello"},
 			{ContainerID: "prod456", ContainerName: "prod-secret", Message: "password=hunter2"},
@@ -126,6 +173,105 @@ func Test_cloudAlerts_all_out_of_scope_returns_empty(t *testing.T) {
 	assert.NotContains(t, rr.Body.String(), "leak")
 }
 
+// A stream names its containers itself, so one outside the user's labels must not
+// leak its update record (name, image, digests) through a container-update event.
+func Test_streamContainerLogs_no_update_marker_out_of_scope(t *testing.T) {
+	prev := container.Updates
+	container.Updates = container.NewUpdateRecords()
+	t.Cleanup(func() { container.Updates = prev })
+	at := time.Now()
+	container.Updates.Add(container.UpdateRecord{Host: "localhost", Name: "dev-allowed", NewID: "dev123", At: at})
+	container.Updates.Add(container.UpdateRecord{Host: "localhost", Name: "prod-secret", NewID: "prod456", At: at})
+
+	for _, tc := range []struct {
+		query  string
+		marker bool
+	}{
+		{query: "container=localhost/prod456", marker: false},
+		{query: "container=localhost/dev123&container=localhost/prod456", marker: true},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			h := restrictedHandler(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			req := httptest.NewRequest(http.MethodGet, "/api/containers/logs/stream?stdout=1&stderr=1&"+tc.query, nil).
+				WithContext(auth.WithUser(ctx, auth.User{ContainerLabels: devLabels}))
+			q := req.URL.Query()
+			addAllLogLevels(q)
+			req.URL.RawQuery = q.Encode()
+
+			rr := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				h.streamContainerLogs(rr, req)
+			}()
+			time.Sleep(300 * time.Millisecond)
+			cancel()
+			<-done
+
+			body := rr.Body.String()
+			assert.NotContains(t, body, "prod-secret")
+			assert.NotContains(t, body, "prod456")
+			assert.Equal(t, tc.marker, strings.Contains(body, "container-update"))
+		})
+	}
+}
+
+// The megaphone's update feed rides the events stream, so it is gated like the
+// containers: an update to a container outside the user's labels never reaches
+// them. An older update whose container is gone is shown by its name only when
+// there is no label filter, since a name can be reused under other labels.
+func Test_streamEvents_update_feed_out_of_scope(t *testing.T) {
+	prev := container.Updates
+	container.Updates = container.NewUpdateRecords()
+	t.Cleanup(func() { container.Updates = prev })
+	at := time.Now()
+	container.Updates.Add(container.UpdateRecord{Host: "localhost", Name: "dev-allowed", NewID: "olddev", ImageRef: "dev:first", At: at.Add(-time.Hour)})
+	container.Updates.Add(container.UpdateRecord{Host: "localhost", Name: "dev-allowed", NewID: "dev123", ImageRef: "dev:second", At: at})
+	container.Updates.Add(container.UpdateRecord{Host: "localhost", Name: "prod-secret", NewID: "prod456", At: at})
+	container.Updates.Add(container.UpdateRecord{Host: "localhost", Name: "dev-allowed", NewID: "ancient", ImageRef: "dev:ancient", At: at.Add(-8 * 24 * time.Hour)})
+
+	stream := func(user auth.User) string {
+		h := restrictedHandler(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		req := httptest.NewRequest(http.MethodGet, "/api/events/stream", nil).WithContext(auth.WithUser(ctx, user))
+		rr := httptest.NewRecorder()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			h.streamEvents(rr, req)
+		}()
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+		<-done
+		return rr.Body.String()
+	}
+
+	filtered := stream(auth.User{ContainerLabels: devLabels})
+	assert.Contains(t, filtered, "dev:second")
+	assert.NotContains(t, filtered, "dev:first", "a gone container's labels are unknown, so its name proves nothing")
+	assert.NotContains(t, filtered, "dev:ancient", "an update older than the feed window is not sent")
+	assert.NotContains(t, filtered, "prod-secret")
+	assert.NotContains(t, filtered, "prod456")
+
+	unfiltered := stream(auth.User{})
+	assert.Contains(t, unfiltered, "dev:first", "without a filter an older update is shown by its name")
+	assert.Contains(t, unfiltered, "prod-secret")
+	assert.NotContains(t, unfiltered, "dev:ancient")
+}
+
+func Test_recentUpdates_caps_newest(t *testing.T) {
+	now := time.Now()
+	var records []container.UpdateRecord
+	for i := range 30 {
+		records = append(records, container.UpdateRecord{Name: fmt.Sprint(i), At: now.Add(time.Duration(i-30) * time.Minute)})
+	}
+	got := recentUpdates(records, now, func(container.UpdateRecord) bool { return true })
+	require.Len(t, got, updateFeedLimit)
+	assert.Equal(t, "10", got[0].Name)
+	assert.Equal(t, "29", got[len(got)-1].Name)
+}
+
 func Test_requireNotificationsRole(t *testing.T) {
 	h := restrictedHandler(t)
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTeapot) })
@@ -167,4 +313,35 @@ func Test_requireCloudRole(t *testing.T) {
 	assert.Equal(t, http.StatusTeapot, serve(withUser(auth.User{Roles: auth.Cloud})))
 	// Unset roles parse to All, so existing users keep cloud access.
 	assert.Equal(t, http.StatusTeapot, serve(withUser(auth.User{Roles: auth.All, ContainerLabels: devLabels})))
+}
+
+// Cloud words InvalidArgument and ResourceExhausted for the person who typed
+// the query, so those messages reach the UI verbatim — unwrapped from the
+// client's "cloud: search: %w". Anything else stays generic.
+func Test_cloudSearchLogs_passes_query_errors_through(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err      error
+		wantCode int
+		wantMsg  string
+	}{
+		"invalid":   {status.Error(codes.InvalidArgument, "Wrap it in double quotes."), http.StatusBadRequest, "Wrap it in double quotes."},
+		"too broad": {status.Error(codes.ResourceExhausted, "Narrow it to a container."), http.StatusUnprocessableEntity, "Narrow it to a container."},
+		"internal":  {status.Error(codes.Internal, "vl exploded"), http.StatusBadGateway, "cloud search failed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := restrictedHandler(t)
+			h.config.Cloud.SearchLogs = func(context.Context, string, int32, string, string, int64, bool, bool) (*cloud.SearchLogResult, error) {
+				return nil, fmt.Errorf("cloud: search: %w", tc.err)
+			}
+			h.hostService = &cloudLinkedService{HostService: h.hostService, cc: &notification.CloudConfig{APIKey: "key"}}
+
+			rr := httptest.NewRecorder()
+			h.cloudSearchLogs(rr, httptest.NewRequest(http.MethodGet, "/api/cloud/search/logs?q=x", nil))
+
+			require.Equal(t, tc.wantCode, rr.Code)
+			var body map[string]string
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+			assert.Equal(t, tc.wantMsg, body["error"])
+		})
+	}
 }

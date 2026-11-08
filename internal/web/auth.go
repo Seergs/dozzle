@@ -1,10 +1,10 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
-	"strings"
-	"time"
 
+	"github.com/amir20/dozzle/internal/auth"
 	"github.com/rs/zerolog/log"
 )
 
@@ -13,20 +13,7 @@ func (h *handler) createToken(w http.ResponseWriter, r *http.Request) {
 	pass := r.PostFormValue("password")
 
 	if token, err := h.config.Authorization.Authorizer.CreateToken(user, pass); err == nil {
-		expires := time.Time{}
-		if h.config.Authorization.TTL > 0 {
-			expires = time.Now().Add(h.config.Authorization.TTL)
-		}
-
-		http.SetCookie(w, &http.Cookie{
-			Name:     "jwt",
-			Value:    token,
-			HttpOnly: true,
-			Path:     "/",
-			SameSite: http.SameSiteLaxMode,
-			Secure:   isHTTPS(r),
-			Expires:  expires,
-		})
+		auth.SetSessionCookie(w, r, token, h.config.Authorization.TTL)
 		log.Info().Str("user", user).Msg("Token created")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(http.StatusText(http.StatusOK)))
@@ -36,25 +23,28 @@ func (h *handler) createToken(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *handler) deleteToken(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     "jwt",
-		Value:    "",
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-		Secure:   isHTTPS(r),
-		Expires:  time.Unix(0, 0),
-	})
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(http.StatusText(http.StatusOK)))
+// LogoutRedirector is an Authorizer that sends the browser somewhere once its
+// session is cleared, the issuer's end_session_endpoint under oidc.
+type LogoutRedirector interface {
+	LogoutRedirect(*http.Request) *auth.LogoutTarget
 }
 
-// isHTTPS reports whether the original client request used HTTPS, accounting
-// for TLS terminated at an upstream reverse proxy via X-Forwarded-Proto.
-func isHTTPS(r *http.Request) bool {
-	if r.TLS != nil {
-		return true
+func (h *handler) deleteToken(w http.ResponseWriter, r *http.Request) {
+	// Read before the cookie is cleared: the session names what to hand back
+	// to the issuer.
+	var target *auth.LogoutTarget
+	if redirector, ok := h.config.Authorization.Authorizer.(LogoutRedirector); ok {
+		target = redirector.LogoutRedirect(r)
 	}
-	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+
+	auth.ClearSessionCookie(w, r)
+
+	if target != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(target)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(http.StatusText(http.StatusOK)))
 }

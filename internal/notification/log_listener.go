@@ -8,14 +8,13 @@ import (
 	"time"
 
 	"github.com/amir20/dozzle/internal/container"
-	container_support "github.com/amir20/dozzle/internal/support/container"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog/log"
 )
 
 // ContainerMatcher is an interface for checking if a container should be listened to
 type ContainerMatcher interface {
-	ShouldListenToContainer(c container.Container) bool
+	ShouldListenToContainer(c container.Container, host container.Host) bool
 }
 
 // streamEntry tracks an active log stream with its context for identity comparison
@@ -26,24 +25,26 @@ type streamEntry struct {
 
 // ContainerLogListener manages active log streams for containers across multiple clients
 type ContainerLogListener struct {
-	clients          []container_support.ClientService
-	containerClients *xsync.Map[string, container_support.ClientService] // containerID -> owning client
-	activeStreams    *xsync.Map[string, *streamEntry]                    // containerID -> active stream
+	clients          []container.ClientService
+	containerClients *xsync.Map[string, container.ClientService] // containerID -> owning client
+	activeStreams    *xsync.Map[string, *streamEntry]            // containerID -> active stream
 	matcher          ContainerMatcher
 	logChannel       chan *container.LogEvent
 	ctx              context.Context
 	cache            *TTLCache[string, containerInfo]
+	hosts            *xsync.Map[string, container.Host] // hostID -> host, so container expressions can see hostName
 }
 
 // NewContainerLogListener creates a new listener for multiple clients
-func NewContainerLogListener(ctx context.Context, clients []container_support.ClientService) *ContainerLogListener {
+func NewContainerLogListener(ctx context.Context, clients []container.ClientService) *ContainerLogListener {
 	return &ContainerLogListener{
 		clients:          clients,
-		containerClients: xsync.NewMap[string, container_support.ClientService](),
+		containerClients: xsync.NewMap[string, container.ClientService](),
 		activeStreams:    xsync.NewMap[string, *streamEntry](),
 		logChannel:       make(chan *container.LogEvent, 1000),
 		ctx:              ctx,
 		cache:            NewTTLCache[string, containerInfo](ctx, 30*time.Second),
+		hosts:            xsync.NewMap[string, container.Host](),
 	}
 }
 
@@ -61,10 +62,11 @@ func (l *ContainerLogListener) Start(matcher ContainerMatcher) error {
 			log.Warn().Err(err).Msg("Failed to list containers from client")
 			continue
 		}
+		host := l.refreshHost(client)
 
 		// Start listening to containers that match
 		for _, c := range containers {
-			if l.matcher.ShouldListenToContainer(c) {
+			if l.matcher.ShouldListenToContainer(c, host) {
 				l.startListening(c, client, time.Now())
 			}
 		}
@@ -82,7 +84,7 @@ func (l *ContainerLogListener) Start(matcher ContainerMatcher) error {
 				if !ok {
 					return
 				}
-				if l.matcher.ShouldListenToContainer(c) {
+				if l.matcher.ShouldListenToContainer(c, l.hostOf(c)) {
 					l.startListeningByID(c)
 				}
 			}
@@ -101,10 +103,11 @@ func (l *ContainerLogListener) UpdateStreams() {
 			log.Warn().Err(err).Msg("Failed to list containers from client")
 			continue
 		}
+		host := l.refreshHost(client)
 
 		// Check each container against matcher
 		for _, c := range containers {
-			shouldListen := l.matcher.ShouldListenToContainer(c)
+			shouldListen := l.matcher.ShouldListenToContainer(c, host)
 			isListening := l.isListening(c.ID)
 
 			if shouldListen && !isListening {
@@ -116,8 +119,33 @@ func (l *ContainerLogListener) UpdateStreams() {
 	}
 }
 
+// refreshHost fetches the client's host and remembers it by ID. An unreachable agent
+// still returns its last known host, which is good enough for matching on hostName.
+func (l *ContainerLogListener) refreshHost(client container.ClientService) container.Host {
+	host, _ := client.Host(l.ctx)
+	if host.ID != "" {
+		l.hosts.Store(host.ID, host)
+	}
+	return host
+}
+
+// hostOf returns the remembered host for a container. In k8s a pod's Host is its node
+// name, which never matches the cluster client's host ID, so with a single client fall
+// back to that client's host. That is what startup and processLogEvent use too.
+func (l *ContainerLogListener) hostOf(c container.Container) container.Host {
+	if host, ok := l.hosts.Load(c.Host); ok {
+		return host
+	}
+	if len(l.clients) == 1 && l.hosts.Size() == 1 {
+		var only container.Host
+		l.hosts.Range(func(_ string, h container.Host) bool { only = h; return false })
+		return only
+	}
+	return container.Host{ID: c.Host}
+}
+
 // startListening starts listening to a container's logs with a known client
-func (l *ContainerLogListener) startListening(c container.Container, client container_support.ClientService, since time.Time) {
+func (l *ContainerLogListener) startListening(c container.Container, client container.ClientService, since time.Time) {
 	streamCtx, cancel := context.WithCancel(l.ctx)
 	entry := &streamEntry{ctx: streamCtx, cancel: cancel}
 
@@ -188,18 +216,30 @@ func (l *ContainerLogListener) FindContainer(ctx context.Context, id string, lab
 	return client.FindContainer(ctx, id, labels)
 }
 
+// findContainerAndClient resolves the owning client for a container. A short-lived
+// container (a k8s CronJob pod) can finish streaming and be cleaned up before its
+// buffered log events are processed, so fall back to asking every client.
+func (l *ContainerLogListener) findContainerAndClient(ctx context.Context, id string, labels container.ContainerLabels) (container.Container, container.ClientService, error) {
+	if client, exists := l.containerClients.Load(id); exists {
+		c, err := client.FindContainer(ctx, id, labels)
+		return c, client, err
+	}
+
+	for _, client := range l.clients {
+		if c, err := client.FindContainer(ctx, id, labels); err == nil {
+			return c, client, nil
+		}
+	}
+	return container.Container{}, nil, fmt.Errorf("container %s not found in any client", id)
+}
+
 // FindContainerWithHost finds a container and its host by container ID, using a TTL cache.
 func (l *ContainerLogListener) FindContainerWithHost(ctx context.Context, id string, labels container.ContainerLabels) (container.Container, container.Host, error) {
 	if cached, ok := l.cache.Load(id); ok {
 		return cached.container, cached.host, nil
 	}
 
-	client, exists := l.containerClients.Load(id)
-	if !exists {
-		return container.Container{}, container.Host{}, fmt.Errorf("container %s not found in any client", id)
-	}
-
-	c, err := client.FindContainer(ctx, id, labels)
+	c, client, err := l.findContainerAndClient(ctx, id, labels)
 	if err != nil {
 		return container.Container{}, container.Host{}, err
 	}

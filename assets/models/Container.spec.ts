@@ -1,5 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
-import { Container, emptyStat, type Stat } from "./Container";
+import { computed, isReactive, reactive } from "vue";
+import type { ContainerJson } from "@/types/Container";
+import { Container, decodeStats, diskRate, emptyStat, networkRate, uptime, type Stat } from "./Container";
+import { useHosts, type Host } from "@/stores/hosts";
+import { containerFixture } from "@/testing/containerFixture";
 
 vi.mock("@/stores/config", () => ({
   __esModule: true,
@@ -8,23 +12,16 @@ vi.mock("@/stores/config", () => ({
 }));
 
 function makeContainer(
-  overrides: { labels?: Record<string, string>; image?: string; command?: string; stats?: Stat[] } = {},
+  overrides: {
+    labels?: Record<string, string>;
+    image?: string;
+    command?: string;
+    stats?: Stat[];
+    ports?: string[];
+    host?: string;
+  } = {},
 ) {
-  return new Container(
-    "id-1",
-    new Date(),
-    new Date(),
-    new Date(),
-    overrides.image ?? "image",
-    "display-name",
-    overrides.command ?? "command",
-    "localhost",
-    overrides.labels ?? {},
-    "running",
-    0,
-    0,
-    overrides.stats ?? [],
-  );
+  return containerFixture({ id: "id-1", name: "display-name", ...overrides });
 }
 
 function makeStat(partial: Partial<Stat> = {}): Stat {
@@ -78,6 +75,28 @@ describe("Container.name", () => {
   });
 });
 
+describe("Container.health", () => {
+  test("reads nothing once the container stops, and comes back with it", () => {
+    const container = reactive(makeContainer());
+    container.health = "healthy";
+    expect(container.health).toBe("healthy");
+
+    container.state = "exited";
+    expect(container.health).toBeUndefined();
+
+    container.state = "running";
+    container.health = "starting";
+    expect(container.health).toBe("starting");
+  });
+
+  test("a paused container keeps its health", () => {
+    const container = reactive(makeContainer());
+    container.health = "healthy";
+    container.state = "paused";
+    expect(container.health).toBe("healthy");
+  });
+});
+
 describe("Container.storageKey", () => {
   test("combines stripped image with command", () => {
     expect(makeContainer({ image: "nginx:1.25", command: "run" }).storageKey).toBe("nginx:run");
@@ -87,6 +106,16 @@ describe("Container.storageKey", () => {
 describe("Container.hostLabel", () => {
   test("resolves the host name from config", () => {
     expect(makeContainer().hostLabel).toBe("localhost");
+  });
+
+  test("names a host added after the page loaded", () => {
+    const { updateHost, removeHost } = useHosts();
+    const container = makeContainer({ host: "agent-1" });
+    expect(container.hostLabel).toBeUndefined();
+
+    updateHost({ id: "agent-1", name: "nas", endpoint: "10.0.0.5:7007" } as Host);
+    expect(container.hostLabel).toBe("nas");
+    removeHost("agent-1");
   });
 });
 
@@ -105,6 +134,14 @@ describe("Container stats history", () => {
     const c = makeContainer();
     expect(c.statsHistory).toHaveLength(300);
     expect(c.stat).toEqual(emptyStat());
+  });
+
+  test("a history longer than the window keeps the newest 300", () => {
+    const stats = Array.from({ length: 350 }, (_, i) => makeStat({ cpu: i }));
+    const c = makeContainer({ stats });
+    expect(c.statsHistory).toHaveLength(300);
+    expect(c.statsHistory.at(0)).toEqual(stats[50]);
+    expect(c.statsHistory.at(-1)).toEqual(stats.at(-1));
   });
 });
 
@@ -141,6 +178,47 @@ describe("Container.updateStat", () => {
   });
 });
 
+// The store keeps containers in a deeply reactive array. That is what used to drag
+// all 300 stats of every container into the proxy graph and made a stat tick cost
+// tens of milliseconds across a busy table. These two guard the arrangement that
+// fixed it, and they fail independently: `markRaw` is what keeps the window out of
+// the proxy graph, and the `triggerRef` is the only thing that wakes a reader once
+// it is out. Losing either one is silent without them.
+describe("Container stats reactivity", () => {
+  test("the series stays raw inside a reactive array", () => {
+    const containers = reactive([makeContainer()]);
+    const c = containers[0] as unknown as Container;
+
+    expect(isReactive(c.statsHistory)).toBe(false);
+    c.updateStat(makeStat({ cpu: 42 }));
+    expect(isReactive(c.statsHistory)).toBe(false);
+    expect(isReactive(c.statsHistory.at(-1))).toBe(false);
+    expect(c.statsHistory.at(-1)?.cpu).toBe(42);
+  });
+
+  test("a reader of statsHistory re-runs on a new sample", () => {
+    const containers = reactive([makeContainer()]);
+    const c = containers[0] as unknown as Container;
+
+    let runs = 0;
+    const latestCpu = computed(() => {
+      runs++;
+      return c.statsHistory.at(-1)!.cpu;
+    });
+
+    expect(latestCpu.value).toBe(0);
+    expect(runs).toBe(1);
+
+    c.updateStat(makeStat({ cpu: 42 }));
+    expect(latestCpu.value).toBe(42);
+    expect(runs).toBe(2);
+
+    // and stays memoized when nothing has arrived
+    expect(latestCpu.value).toBe(42);
+    expect(runs).toBe(2);
+  });
+});
+
 describe("Container.icon", () => {
   test("derives the icon from the image", () => {
     expect(makeContainer({ image: "lscr.io/linuxserver/sonarr:latest" }).icon).toBe("sonarr");
@@ -168,5 +246,424 @@ describe("Container.icon", () => {
 
   test("ignores a blank override", () => {
     expect(makeContainer({ image: "sonarr", labels: { "dev.dozzle.icon": "  " } }).icon).toBe("sonarr");
+  });
+
+  test("a data URI override is kept byte for byte", () => {
+    const icon = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=";
+    expect(makeContainer({ image: "sonarr", labels: { "dev.dozzle.icon": ` ${icon} ` } }).icon).toBe(icon);
+  });
+
+  test("a data URI that is not an accepted image falls back to nothing", () => {
+    const labels = { "dev.dozzle.icon": "data:text/html;base64,PHNjcmlwdD4=" };
+    expect(makeContainer({ image: "sonarr", labels }).icon).toBeUndefined();
+  });
+});
+
+describe("Container.url", () => {
+  test("undefined without the label", () => {
+    expect(makeContainer().url).toBeUndefined();
+  });
+
+  test("returns http and https urls as written", () => {
+    expect(makeContainer({ labels: { "dev.dozzle.url": "https://grafana.example.com" } }).url).toBe(
+      "https://grafana.example.com",
+    );
+    expect(makeContainer({ labels: { "dev.dozzle.url": "http://localhost:3000/d/home" } }).url).toBe(
+      "http://localhost:3000/d/home",
+    );
+  });
+
+  test("trims surrounding whitespace", () => {
+    expect(makeContainer({ labels: { "dev.dozzle.url": "  https://example.com  " } }).url).toBe("https://example.com");
+  });
+
+  test("rejects other schemes", () => {
+    expect(makeContainer({ labels: { "dev.dozzle.url": "javascript:alert(1)" } }).url).toBeUndefined();
+    expect(makeContainer({ labels: { "dev.dozzle.url": "data:text/html,<script>" } }).url).toBeUndefined();
+    expect(makeContainer({ labels: { "dev.dozzle.url": "ftp://example.com" } }).url).toBeUndefined();
+  });
+
+  test("rejects a relative or malformed value", () => {
+    expect(makeContainer({ labels: { "dev.dozzle.url": "/grafana" } }).url).toBeUndefined();
+    expect(makeContainer({ labels: { "dev.dozzle.url": "example.com" } }).url).toBeUndefined();
+    expect(makeContainer({ labels: { "dev.dozzle.url": "   " } }).url).toBeUndefined();
+  });
+});
+
+describe("Container.imageVersion", () => {
+  const oci = { "org.opencontainers.image.version": "v3.7.14" };
+
+  test("reads the OCI version label for a latest image", () => {
+    expect(makeContainer({ image: "traefik:latest", labels: oci }).imageVersion).toBe("v3.7.14");
+  });
+
+  test("treats an untagged image as latest, even behind a registry port", () => {
+    expect(makeContainer({ image: "registry:5000/traefik", labels: oci }).imageVersion).toBe("v3.7.14");
+    expect(makeContainer({ image: "traefik@sha256:abc", labels: oci }).imageVersion).toBe("v3.7.14");
+  });
+
+  test("falls back to the label-schema version", () => {
+    const labels = { "org.label-schema.version": "1.2.3" };
+    expect(makeContainer({ image: "app:latest", labels }).imageVersion).toBe("1.2.3");
+  });
+
+  test("stays quiet for a pinned tag, a missing label, or a label that just says latest", () => {
+    expect(
+      makeContainer({ image: "amir20/dozzle:main", labels: { "org.opencontainers.image.version": "main" } })
+        .imageVersion,
+    ).toBeUndefined();
+    expect(makeContainer({ image: "traefik:v3.7", labels: oci }).imageVersion).toBeUndefined();
+    expect(makeContainer({ image: "traefik:latest" }).imageVersion).toBeUndefined();
+    expect(
+      makeContainer({ image: "app:latest", labels: { "org.opencontainers.image.version": "latest" } }).imageVersion,
+    ).toBeUndefined();
+  });
+});
+
+describe("Container.publishedPorts", () => {
+  test("empty without ports", () => {
+    expect(makeContainer().publishedPorts).toEqual([]);
+  });
+
+  test("picks the host port out of a binding", () => {
+    expect(makeContainer({ ports: ["0.0.0.0:8080->80/tcp"] }).publishedPorts).toEqual([8080]);
+  });
+
+  test("handles an empty host ip and ipv6 bindings", () => {
+    expect(makeContainer({ ports: [":3000->3000/tcp"] }).publishedPorts).toEqual([3000]);
+    expect(makeContainer({ ports: ["::: 0"] }).publishedPorts).toEqual([]);
+    expect(makeContainer({ ports: [":::9000->9000/tcp"] }).publishedPorts).toEqual([9000]);
+  });
+
+  test("skips unpublished ports and udp", () => {
+    expect(makeContainer({ ports: ["80/tcp", "0.0.0.0:53->53/udp"] }).publishedPorts).toEqual([]);
+  });
+
+  test("dedupes and sorts numerically", () => {
+    expect(
+      makeContainer({ ports: ["0.0.0.0:9000->9000/tcp", ":::9000->9000/tcp", "0.0.0.0:81->81/tcp"] }).publishedPorts,
+    ).toEqual([81, 9000]);
+  });
+});
+
+describe("Container.portMappings", () => {
+  test("pairs the host port with the container port", () => {
+    expect(makeContainer({ ports: ["0.0.0.0:8080->80/tcp"] }).portMappings).toEqual([{ host: 8080, container: 80 }]);
+  });
+
+  test("dedupes ipv4 and ipv6 bindings of the same host port", () => {
+    expect(makeContainer({ ports: ["0.0.0.0:9000->9000/tcp", ":::9000->9000/tcp"] }).portMappings).toEqual([
+      { host: 9000, container: 9000 },
+    ]);
+  });
+});
+
+describe("Container.traefikUrls", () => {
+  test("empty without traefik labels", () => {
+    expect(makeContainer().traefikUrls).toEqual([]);
+    expect(makeContainer({ labels: { "traefik.enable": "true" } }).traefikUrls).toEqual([]);
+  });
+
+  test("reads the host out of a router rule", () => {
+    expect(
+      makeContainer({ labels: { "traefik.http.routers.grafana.rule": "Host(`grafana.example.com`)" } }).traefikUrls,
+    ).toEqual(["http://grafana.example.com"]);
+  });
+
+  test("uses https when the router terminates tls", () => {
+    const tls = { "traefik.http.routers.g.rule": "Host(`g.example.com`)", "traefik.http.routers.g.tls": "true" };
+    expect(makeContainer({ labels: tls }).traefikUrls).toEqual(["https://g.example.com"]);
+
+    const resolver = {
+      "traefik.http.routers.g.rule": "Host(`g.example.com`)",
+      "traefik.http.routers.g.tls.certresolver": "le",
+    };
+    expect(makeContainer({ labels: resolver }).traefikUrls).toEqual(["https://g.example.com"]);
+  });
+
+  test("uses https for a secure entrypoint", () => {
+    const labels = {
+      "traefik.http.routers.g.rule": "Host(`g.example.com`)",
+      "traefik.http.routers.g.entrypoints": "web,websecure",
+    };
+    expect(makeContainer({ labels }).traefikUrls).toEqual(["https://g.example.com"]);
+  });
+
+  test("stays http when tls is explicitly off", () => {
+    const labels = {
+      "traefik.http.routers.g.rule": "Host(`g.example.com`)",
+      "traefik.http.routers.g.tls": "false",
+      "traefik.http.routers.g.entrypoints": "web",
+    };
+    expect(makeContainer({ labels }).traefikUrls).toEqual(["http://g.example.com"]);
+  });
+
+  test("appends a path matcher", () => {
+    const labels = {
+      "traefik.http.routers.g.rule": "Host(`example.com`) && PathPrefix(`/grafana`)",
+      "traefik.http.routers.g.tls": "true",
+    };
+    expect(makeContainer({ labels }).traefikUrls).toEqual(["https://example.com/grafana"]);
+  });
+
+  test("drops a bare root path", () => {
+    const labels = { "traefik.http.routers.g.rule": "Host(`example.com`) && PathPrefix(`/`)" };
+    expect(makeContainer({ labels }).traefikUrls).toEqual(["http://example.com"]);
+  });
+
+  test("expands every host in a rule and across routers", () => {
+    const labels = {
+      "traefik.http.routers.b.rule": "Host(`b.example.com`)",
+      "traefik.http.routers.a.rule": "Host(`a.example.com`, `www.a.example.com`)",
+    };
+    expect(makeContainer({ labels }).traefikUrls).toEqual([
+      "http://a.example.com",
+      "http://www.a.example.com",
+      "http://b.example.com",
+    ]);
+  });
+
+  test("dedupes the same host across routers", () => {
+    const labels = {
+      "traefik.http.routers.web.rule": "Host(`example.com`)",
+      "traefik.http.routers.websecure.rule": "Host(`example.com`)",
+    };
+    expect(makeContainer({ labels }).traefikUrls).toEqual(["http://example.com"]);
+  });
+
+  test("ignores rules without a host matcher", () => {
+    expect(makeContainer({ labels: { "traefik.http.routers.g.rule": "PathPrefix(`/grafana`)" } }).traefikUrls).toEqual(
+      [],
+    );
+    expect(
+      makeContainer({ labels: { "traefik.http.routers.g.rule": "HostRegexp(`{sub:.+}.example.com`)" } }).traefikUrls,
+    ).toEqual([]);
+  });
+
+  test("respects traefik.enable=false", () => {
+    const labels = {
+      "traefik.enable": "false",
+      "traefik.http.routers.g.rule": "Host(`g.example.com`)",
+    };
+    expect(makeContainer({ labels }).traefikUrls).toEqual([]);
+  });
+});
+
+describe("decodeStats", () => {
+  test("rebuilds one stat per point, summing the delta-encoded columns", () => {
+    const stats = decodeStats({
+      cpu: [1.5, 0.5, 0],
+      memory: [2, 2.5, 1],
+      memoryUsage: [1000, 200, -300],
+      networkRxTotal: [5000, 100, -5060],
+      networkTxTotal: [10, 0, -10],
+      diskReadTotal: [7, 0, -7],
+      diskWriteTotal: [100, 50, -150],
+    });
+    expect(stats).toEqual([
+      {
+        cpu: 1.5,
+        memory: 2,
+        memoryUsage: 1000,
+        networkRxTotal: 5000,
+        networkTxTotal: 10,
+        diskReadTotal: 7,
+        diskWriteTotal: 100,
+      },
+      {
+        cpu: 0.5,
+        memory: 2.5,
+        memoryUsage: 1200,
+        networkRxTotal: 5100,
+        networkTxTotal: 10,
+        diskReadTotal: 7,
+        diskWriteTotal: 150,
+      },
+      {
+        cpu: 0,
+        memory: 1,
+        memoryUsage: 900,
+        networkRxTotal: 40,
+        networkTxTotal: 0,
+        diskReadTotal: 0,
+        diskWriteTotal: 0,
+      },
+    ]);
+  });
+
+  test("a container without history decodes to none", () => {
+    expect(decodeStats(undefined)).toEqual([]);
+  });
+});
+
+describe("networkRate", () => {
+  test("is undefined until two real samples exist", () => {
+    const c = makeContainer();
+    expect(networkRate(c)).toBeUndefined();
+    c.updateStat(makeStat({ networkRxTotal: 100 }));
+    expect(networkRate(c)).toBeUndefined();
+  });
+
+  test("is the difference between the last two samples", () => {
+    const c = makeContainer();
+    c.updateStat(makeStat({ networkRxTotal: 100, networkTxTotal: 50 }));
+    c.updateStat(makeStat({ networkRxTotal: 1124, networkTxTotal: 60 }));
+    expect(networkRate(c)).toEqual({ rx: 1024, tx: 10 });
+  });
+
+  test("never goes negative when a counter resets", () => {
+    const c = makeContainer();
+    c.updateStat(makeStat({ networkRxTotal: 500 }));
+    c.updateStat(makeStat({ networkRxTotal: 0 }));
+    expect(networkRate(c)).toEqual({ rx: 0, tx: 0 });
+  });
+
+  test("is undefined for a stopped container", () => {
+    const c = makeContainer();
+    c.updateStat(makeStat());
+    c.updateStat(makeStat({ networkRxTotal: 10 }));
+    c.state = "exited";
+    expect(networkRate(c)).toBeUndefined();
+  });
+});
+
+describe("moving average rates", () => {
+  test("average the per-sample difference rather than the running totals", () => {
+    const c = makeContainer({
+      stats: [
+        makeStat({ networkRxTotal: 0, diskWriteTotal: 0 }),
+        makeStat({ networkRxTotal: 100, diskWriteTotal: 50 }),
+      ],
+    });
+    expect(networkRate(c, true)).toEqual({ rx: 100, tx: 0 });
+    c.updateStat(makeStat({ networkRxTotal: 100, diskWriteTotal: 50 }));
+    // an idle second pulls the average a fifth of the way toward zero
+    expect(networkRate(c, true)).toEqual({ rx: 80, tx: 0 });
+    expect(diskRate(c, true)).toEqual({ read: 0, write: 40 });
+    // the raw rate is just the last second
+    expect(networkRate(c)).toEqual({ rx: 0, tx: 0 });
+  });
+
+  test("a counter that went backwards counts as idle, not negative", () => {
+    const c = makeContainer({ stats: [makeStat({ diskReadTotal: 500 }), makeStat({ diskReadTotal: 600 })] });
+    c.updateStat(makeStat({ diskReadTotal: 10 }));
+    expect(diskRate(c)).toEqual({ read: 0, write: 0 });
+    expect(diskRate(c, true)!.read).toBeCloseTo(80);
+  });
+});
+
+describe("uptime", () => {
+  const zero = new Date("0001-01-01T00:00:00Z");
+  const started = new Date("2026-01-01T10:00:00Z");
+  const finished = new Date("2026-01-01T12:00:00Z");
+
+  test("running and paused measure from the start", () => {
+    expect(uptime({ state: "running", startedAt: started, finishedAt: zero })).toEqual({ state: "up", since: started });
+    expect(uptime({ state: "paused", startedAt: started, finishedAt: zero })).toEqual({
+      state: "paused",
+      since: started,
+    });
+  });
+
+  test("restarting and exited measure from the last stop", () => {
+    expect(uptime({ state: "restarting", startedAt: started, finishedAt: finished })).toEqual({
+      state: "restarting",
+      since: finished,
+    });
+    expect(uptime({ state: "dead", startedAt: started, finishedAt: finished })).toEqual({
+      state: "exited",
+      since: finished,
+    });
+  });
+
+  test("a container that never ran has no uptime", () => {
+    expect(uptime({ state: "created", startedAt: zero, finishedAt: zero })).toBeUndefined();
+    expect(uptime({ state: "exited", startedAt: zero, finishedAt: zero })).toBeUndefined();
+  });
+});
+
+describe("Container.releaseNotesUrl", () => {
+  const notes = (labels: Record<string, string>) => makeContainer({ labels }).releaseNotesUrl;
+
+  test("undefined without a label", () => {
+    expect(makeContainer().releaseNotesUrl).toBeUndefined();
+  });
+
+  test("links a GitHub source to its releases page", () => {
+    expect(notes({ "org.opencontainers.image.source": "https://github.com/grafana/grafana" })).toBe(
+      "https://github.com/grafana/grafana/releases",
+    );
+  });
+
+  test("normalizes a .git suffix, a deeper path and the legacy label-schema label", () => {
+    expect(notes({ "org.label-schema.vcs-url": "https://github.com/jc21/nginx-proxy-manager.git" })).toBe(
+      "https://github.com/jc21/nginx-proxy-manager/releases",
+    );
+    expect(notes({ "org.opencontainers.image.source": "https://github.com/owner/repo/tree/main/docker" })).toBe(
+      "https://github.com/owner/repo/releases",
+    );
+  });
+
+  test("the override label wins over the source", () => {
+    const labels = {
+      "dev.dozzle.releases": "https://www.postgresql.org/docs/release/",
+      "org.opencontainers.image.source": "https://github.com/docker-library/postgres",
+    };
+    expect(notes(labels)).toBe("https://www.postgresql.org/docs/release/");
+  });
+
+  test("nothing for a non-GitHub source or a source without a repository", () => {
+    expect(notes({ "org.opencontainers.image.source": "https://gitlab.com/owner/repo" })).toBeUndefined();
+    expect(notes({ "org.opencontainers.image.source": "https://github.com/owner" })).toBeUndefined();
+  });
+
+  test("rejects other schemes in either label", () => {
+    expect(notes({ "dev.dozzle.releases": "javascript:alert(1)" })).toBeUndefined();
+    expect(notes({ "org.opencontainers.image.source": "git@github.com:owner/repo.git" })).toBeUndefined();
+  });
+});
+
+describe("applyJSON", () => {
+  const json = (extra: Partial<ContainerJson> = {}): ContainerJson => ({
+    id: "id-1",
+    created: "2026-01-01T00:00:00Z",
+    startedAt: "2026-01-02T00:00:00Z",
+    finishedAt: "0001-01-01T00:00:00Z",
+    image: "image",
+    name: "renamed",
+    command: "command",
+    state: "exited",
+    host: "localhost",
+    cpuLimit: 0,
+    memoryLimit: 0,
+    labels: {},
+    ...extra,
+  });
+  const volume = { name: "data", destination: "/data", size: 1, links: 1 };
+
+  test("copies what changes on a live container", () => {
+    const c = makeContainer();
+    c.applyJSON(json({ state: "running", health: "unhealthy", group: "g", sizeRw: 42 }));
+    expect(c.name).toBe("renamed");
+    expect(c.state).toBe("running");
+    expect(c.health).toBe("unhealthy");
+    expect(c.group).toBe("g");
+    expect(c.sizeRw).toBe(42);
+    expect(c.startedAt.toISOString()).toBe("2026-01-02T00:00:00.000Z");
+  });
+
+  test("a re-list keeps volumes and mount stats it does not carry", () => {
+    const c = containerFixture({ volumes: [volume], mountStats: {} });
+    c.applyJSON(json({ mountStats: { "/data": {} as never } }));
+    expect(c.volumes).toEqual([volume]);
+    expect(c.mountStats).toEqual({});
+  });
+
+  test("a whole update clears volumes it does not carry and takes mount stats", () => {
+    const c = containerFixture({ volumes: [volume] });
+    const mountStats = { "/data": {} as never };
+    c.applyJSON(json({ mountStats }), { whole: true });
+    expect(c.volumes).toEqual([]);
+    expect(c.mountStats).toEqual(mountStats);
   });
 });

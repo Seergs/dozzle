@@ -1,0 +1,931 @@
+package agent
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"io"
+	"sync"
+	"time"
+
+	"strings"
+
+	"github.com/amir20/dozzle/internal/container"
+	"github.com/amir20/dozzle/internal/container/agent/pb"
+	"github.com/amir20/dozzle/internal/imagecheck"
+	"github.com/amir20/dozzle/types"
+	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/encoding/gzip"
+	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+type Client struct {
+	client       pb.AgentServiceClient
+	conn         *grpc.ClientConn
+	endpoint     string
+	nameOverride string
+	group        string
+}
+
+func NewClient(endpoint string, certificates tls.Certificate, opts ...grpc.DialOption) (*Client, error) {
+	endpoint, nameOverride, group, err := ParseEndpoint(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	caCertPool := x509.NewCertPool()
+	c, err := x509.ParseCertificate(certificates.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse certificate: %w", err)
+	}
+	caCertPool.AddCert(c)
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{certificates},
+		// Agent certs never name the host they run on, so the stock check (which
+		// includes the hostname) is off, and the chain is checked below instead.
+		InsecureSkipVerify: true,
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			return verifyAgentCert(rawCerts, caCertPool)
+		},
+	}
+
+	// Create the gRPC transport credentials
+	creds := credentials.NewTLS(tlsConfig)
+
+	opts = append(opts,
+		grpc.WithTransportCredentials(creds),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(10*1024*1024), grpc.UseCompressor(gzip.Name)),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	)
+	conn, err := grpc.NewClient(endpoint, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to %s: %w", endpoint, err)
+	}
+
+	client := pb.NewAgentServiceClient(conn)
+
+	return &Client{
+		client:       client,
+		conn:         conn,
+		endpoint:     endpoint,
+		nameOverride: nameOverride,
+		group:        group,
+	}, nil
+}
+
+// ParseEndpoint splits an agent endpoint of the form "address|name|group" into
+// its parts. Name and group are optional; address is required.
+// verifyAgentCert is the hub's half of mutual TLS: the agent must present a cert
+// that chains to the hub's own, the same test the agent puts the hub through.
+// Without it any TLS server speaking the agent protocol could be added as a host
+// and be handed the notification and cloud config.
+func verifyAgentCert(rawCerts [][]byte, roots *x509.CertPool) error {
+	if len(rawCerts) == 0 {
+		return errors.New("agent presented no certificate")
+	}
+	certs := make([]*x509.Certificate, len(rawCerts))
+	for i, raw := range rawCerts {
+		c, err := x509.ParseCertificate(raw)
+		if err != nil {
+			return fmt.Errorf("failed to parse agent certificate: %w", err)
+		}
+		certs[i] = c
+	}
+	intermediates := x509.NewCertPool()
+	for _, c := range certs[1:] {
+		intermediates.AddCert(c)
+	}
+	_, err := certs[0].Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	})
+	if err != nil {
+		return fmt.Errorf("agent certificate is not trusted by this dozzle: %w", err)
+	}
+	return nil
+}
+
+func ParseEndpoint(endpoint string) (string, string, string, error) {
+	parts := strings.Split(endpoint, "|")
+	if len(parts) > 3 || parts[0] == "" {
+		return "", "", "", fmt.Errorf("invalid agent endpoint: %s", endpoint)
+	}
+
+	name := ""
+	if len(parts) >= 2 {
+		name = parts[1]
+	}
+
+	group := ""
+	if len(parts) == 3 {
+		group = parts[2]
+	}
+
+	return parts[0], name, group, nil
+}
+
+func rpcErrToErr(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	status, ok := status.FromError(err)
+	if !ok {
+		return err
+	}
+
+	if status.Code() == codes.Unknown && status.Message() == "EOF" {
+		return fmt.Errorf("EOF error while converting gRPC to error: %w", io.EOF)
+	}
+
+	switch status.Code() {
+	case codes.Canceled:
+		return fmt.Errorf("canceled: %v with %w", status.Message(), context.Canceled)
+	case codes.DeadlineExceeded:
+		return fmt.Errorf("deadline exceeded: %v with %w", status.Message(), context.DeadlineExceeded)
+	case codes.Unknown:
+		return fmt.Errorf("unknown error: %v with %w", status.Message(), err)
+	case codes.OK:
+		return nil
+	default:
+		return fmt.Errorf("unknown code: %v with %w", status.Code(), err)
+	}
+}
+
+func (c *Client) LogHistogram(ctx context.Context, containerID string, from time.Time, to time.Time, width time.Duration) (container.LogHistogram, error) {
+	resp, err := c.client.LogHistogram(ctx, &pb.LogHistogramRequest{
+		ContainerId:  containerID,
+		From:         timestamppb.New(from),
+		To:           timestamppb.New(to),
+		WidthSeconds: int64(width / time.Second),
+	})
+	if err != nil {
+		return container.LogHistogram{}, err
+	}
+
+	h := container.LogHistogram{Start: from, Width: width, Total: resp.Total, Errors: resp.Errors}
+	if resp.ScannedFrom != nil {
+		h.ScannedFrom = resp.ScannedFrom.AsTime()
+	}
+	if resp.Before != nil {
+		h.Before = resp.Before.AsTime()
+	}
+	if resp.After != nil {
+		h.After = resp.After.AsTime()
+	}
+	return h, nil
+}
+
+func (c *Client) LogsBetweenDates(ctx context.Context, containerID string, since time.Time, until time.Time, std container.StdType) (<-chan *container.LogEvent, error) {
+	stream, err := c.client.LogsBetweenDates(ctx, &pb.LogsBetweenDatesRequest{
+		ContainerId: containerID,
+		Since:       timestamppb.New(since),
+		Until:       timestamppb.New(until),
+		StreamTypes: int32(std),
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	events := make(chan *container.LogEvent)
+
+	go func() {
+		sendLogs(stream, events)
+		close(events)
+	}()
+
+	return events, nil
+}
+
+func (c *Client) StreamContainerLogs(ctx context.Context, containerID string, since time.Time, std container.StdType, events chan<- *container.LogEvent) error {
+	stream, err := c.client.StreamLogs(ctx, &pb.StreamLogsRequest{
+		ContainerId: containerID,
+		Since:       timestamppb.New(since),
+		StreamTypes: int32(std),
+	})
+
+	if err != nil {
+		return err
+	}
+
+	return sendLogs(stream, events)
+}
+
+func sendLogs(stream pb.AgentService_StreamLogsClient, events chan<- *container.LogEvent) error {
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			return rpcErrToErr(err)
+		}
+
+		m, err := resp.Event.Message.UnmarshalNew()
+		if err != nil {
+			log.Error().Err(err).Msg("agent client: failed to unmarshal message")
+			continue
+		}
+
+		var message any
+		var logType container.LogType
+		switch m := m.(type) {
+		case *pb.SingleMessage:
+			message = m.Message
+			logType = container.LogTypeSingle
+
+		case *pb.GroupMessage:
+			fragments := make([]container.LogFragment, len(m.Fragments))
+			for i, f := range m.Fragments {
+				fragments[i] = container.LogFragment{
+					Message:         f.Message,
+					TimestampPrefix: int(f.TimestampPrefix),
+				}
+			}
+			message = fragments
+			logType = container.LogTypeGroup
+
+		case *pb.ComplexMessage:
+			message = jsonBytesToFields(m.Data)
+			logType = container.LogTypeComplex
+
+		default:
+			log.Error().Type("message", m).Msg("agent client: unknown message type")
+			continue
+		}
+
+		select {
+		case events <- &container.LogEvent{
+			Id:              resp.Event.Id,
+			ContainerID:     resp.Event.ContainerId,
+			Message:         message,
+			Type:            logType,
+			Timestamp:       resp.Event.Timestamp.AsTime().Unix(),
+			Level:           resp.Event.Level,
+			Stream:          resp.Event.Stream,
+			RawMessage:      resp.Event.RawMessage,
+			TimestampPrefix: int(resp.Event.TimestampPrefix),
+		}:
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
+	}
+}
+
+func (c *Client) StreamRawBytes(ctx context.Context, containerID string, since time.Time, until time.Time, std container.StdType) (io.ReadCloser, error) {
+	out, err := c.client.StreamRawBytes(ctx, &pb.StreamRawBytesRequest{
+		ContainerId: containerID,
+		Since:       timestamppb.New(since),
+		Until:       timestamppb.New(until),
+		StreamTypes: int32(std),
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	r, w := io.Pipe()
+
+	go func() {
+		for {
+			resp, err := out.Recv()
+			if err != nil {
+				err = rpcErrToErr(err)
+				if errors.Is(err, io.EOF) {
+					w.Close()
+					return
+				}
+				if !errors.Is(err, context.Canceled) {
+					log.Error().Err(err).Msg("agent client: failed to receive raw bytes")
+				}
+				// The reader sees the error, so a cut-off download does not pass for a complete one.
+				w.CloseWithError(err)
+				return
+			}
+
+			w.Write(resp.Data)
+		}
+	}()
+
+	return r, nil
+}
+
+func (c *Client) StreamStats(ctx context.Context, stats chan<- container.ContainerStat) error {
+	stream, err := c.client.StreamStats(ctx, &pb.StreamStatsRequest{})
+	if err != nil {
+		return err
+	}
+
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			return rpcErrToErr(err)
+		}
+
+		select {
+		case stats <- container.ContainerStat{
+			CPUPercent:     resp.Stat.CpuPercent,
+			MemoryPercent:  resp.Stat.MemoryPercent,
+			MemoryUsage:    resp.Stat.MemoryUsage,
+			ID:             resp.Stat.Id,
+			NetworkRxTotal: resp.Stat.NetworkRxTotal,
+			NetworkTxTotal: resp.Stat.NetworkTxTotal,
+			DiskReadTotal:  resp.Stat.DiskReadTotal,
+			DiskWriteTotal: resp.Stat.DiskWriteTotal,
+		}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (c *Client) StreamEvents(ctx context.Context, events chan<- container.ContainerEvent) error {
+	stream, err := c.client.StreamEvents(ctx, &pb.StreamEventsRequest{})
+	if err != nil {
+		return err
+	}
+
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			return rpcErrToErr(err)
+		}
+
+		evt := container.ContainerEvent{
+			ActorID:         resp.Event.ActorId,
+			Name:            resp.Event.Name,
+			Host:            resp.Event.Host,
+			Time:            resp.Event.Timestamp.AsTime(),
+			ActorAttributes: resp.Event.ActorAttributes,
+		}
+		if resp.Event.Container != nil {
+			c := containerFromProto(resp.Event.Container)
+			evt.Container = &c
+		}
+		select {
+		case events <- evt:
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
+	}
+}
+
+func (c *Client) StreamNewContainers(ctx context.Context, containers chan<- container.Container) error {
+	stream, err := c.client.StreamContainerStarted(ctx, &pb.StreamContainerStartedRequest{})
+	if err != nil {
+		return err
+	}
+
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			return rpcErrToErr(err)
+		}
+
+		select {
+		case containers <- containerFromProto(resp.Container):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (c *Client) FindContainer(ctx context.Context, containerID string, labels container.ContainerLabels) (container.Container, error) {
+	in := &pb.FindContainerRequest{ContainerId: containerID}
+
+	if labels != nil {
+		in.Filter = make(map[string]*pb.RepeatedString)
+		for k, v := range labels {
+			in.Filter[k] = &pb.RepeatedString{Values: v}
+		}
+	}
+
+	response, err := c.client.FindContainer(ctx, in)
+	if err != nil {
+		return container.Container{}, err
+	}
+
+	return containerFromProto(response.Container), nil
+}
+
+func (c *Client) ListContainers(ctx context.Context, labels container.ContainerLabels) ([]container.Container, error) {
+	in := &pb.ListContainersRequest{}
+
+	if labels != nil {
+		in.Filter = make(map[string]*pb.RepeatedString)
+		for k, v := range labels {
+			in.Filter[k] = &pb.RepeatedString{Values: v}
+		}
+	}
+
+	response, err := c.client.ListContainers(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+
+	containers := make([]container.Container, 0)
+	for _, c := range response.Containers {
+		containers = append(containers, containerFromProto(c))
+	}
+
+	return containers, nil
+}
+
+func (c *Client) Host(ctx context.Context) (container.Host, error) {
+	info, err := c.client.HostInfo(ctx, &pb.HostInfoRequest{})
+	if err != nil {
+		name := c.nameOverride
+		if name == "" {
+			name = c.endpoint
+		}
+		return container.Host{
+			Endpoint:  c.endpoint,
+			Name:      name,
+			Group:     c.group,
+			Type:      "agent",
+			Available: false,
+		}, err
+	}
+
+	host := container.Host{
+		ID:            info.Host.Id,
+		Name:          info.Host.Name,
+		NCPU:          int(info.Host.CpuCores),
+		MemTotal:      int64(info.Host.Memory),
+		Endpoint:      c.endpoint,
+		Type:          "agent",
+		DockerVersion: info.Host.DockerVersion,
+		Runtime:       info.Host.Runtime,
+		AgentVersion:  info.Host.AgentVersion,
+		Group:         c.group,
+	}
+	if c.nameOverride != "" {
+		host.Name = c.nameOverride
+	}
+	if m, ok := hostMetricsFromProto(info.Host); ok || m.DiskTotal > 0 || len(m.Disks) > 0 || m.Reclaimable != nil {
+		host.ApplyHostMetrics(m, ok)
+	}
+
+	return host, nil
+}
+
+func (c *Client) ContainerAction(ctx context.Context, containerId string, action container.ContainerAction) error {
+	var containerAction pb.ContainerAction
+	switch action {
+	case container.Start:
+		containerAction = pb.ContainerAction_Start
+
+	case container.Stop:
+		containerAction = pb.ContainerAction_Stop
+
+	case container.Restart:
+		containerAction = pb.ContainerAction_Restart
+
+	case container.Remove:
+		containerAction = pb.ContainerAction_Remove
+
+	default:
+		return fmt.Errorf("unknown action: %s", action)
+	}
+
+	_, err := c.client.ContainerAction(ctx, &pb.ContainerActionRequest{ContainerId: containerId, Action: containerAction})
+
+	return err
+}
+
+// ListReclaimable returns errors.ErrUnsupported from an agent too old to know the call.
+func (c *Client) ListReclaimable(ctx context.Context) (container.ReclaimableItems, error) {
+	resp, err := c.client.ListReclaimable(ctx, &pb.ListReclaimableRequest{})
+	if status.Code(err) == codes.Unimplemented {
+		return container.ReclaimableItems{}, fmt.Errorf("agent cannot list what a clean up deletes: %w", errors.ErrUnsupported)
+	}
+	if err != nil {
+		return container.ReclaimableItems{}, err
+	}
+	items := container.ReclaimableItems{
+		Images:  make([]container.ReclaimableImage, 0, len(resp.Images)),
+		Volumes: make([]container.ReclaimableVolume, 0, len(resp.Volumes)),
+	}
+	for _, img := range resp.Images {
+		items.Images = append(items.Images, container.ReclaimableImage{ID: img.Id, Tags: append([]string{}, img.Tags...), Size: img.Size})
+	}
+	for _, v := range resp.Volumes {
+		items.Volumes = append(items.Volumes, container.ReclaimableVolume{Name: v.Name, Size: v.Size, Created: v.Created.AsTime()})
+	}
+	return items, nil
+}
+
+// InspectNetwork returns errors.ErrUnsupported from an agent too old to know the call.
+func (c *Client) InspectNetwork(ctx context.Context, name string) (container.Network, error) {
+	resp, err := c.client.InspectNetwork(ctx, &pb.InspectNetworkRequest{Name: name})
+	if status.Code(err) == codes.Unimplemented {
+		return container.Network{}, fmt.Errorf("agent cannot inspect networks: %w", errors.ErrUnsupported)
+	}
+	if err != nil {
+		return container.Network{}, err
+	}
+	return networkFromProto(resp), nil
+}
+
+// InspectVolume returns errors.ErrUnsupported from an agent too old to know the call.
+func (c *Client) InspectVolume(ctx context.Context, name string) (container.Volume, error) {
+	resp, err := c.client.InspectVolume(ctx, &pb.InspectVolumeRequest{Name: name})
+	if status.Code(err) == codes.Unimplemented {
+		return container.Volume{}, fmt.Errorf("agent cannot inspect volumes: %w", errors.ErrUnsupported)
+	}
+	if err != nil {
+		return container.Volume{}, err
+	}
+	return volumeFromProto(resp), nil
+}
+
+// HealthLog returns errors.ErrUnsupported from an agent too old to know the call.
+func (c *Client) HealthLog(ctx context.Context, containerID string) ([]container.HealthProbe, error) {
+	resp, err := c.client.HealthLog(ctx, &pb.HealthLogRequest{ContainerId: containerID})
+	if status.Code(err) == codes.Unimplemented {
+		return nil, fmt.Errorf("agent cannot read healthcheck runs: %w", errors.ErrUnsupported)
+	}
+	if err != nil {
+		return nil, err
+	}
+	probes := make([]container.HealthProbe, 0, len(resp.Probes))
+	for _, p := range resp.Probes {
+		probes = append(probes, container.HealthProbe{
+			Start:    p.Start.AsTime(),
+			End:      p.End.AsTime(),
+			ExitCode: int(p.ExitCode),
+			Output:   p.Output,
+		})
+	}
+	return probes, nil
+}
+
+// PruneHost returns errors.ErrUnsupported from an agent too old to know the call.
+func (c *Client) PruneHost(ctx context.Context, opts container.PruneOptions) (container.PruneResult, error) {
+	resp, err := c.client.PruneHost(ctx, &pb.PruneHostRequest{
+		Images:     opts.Images,
+		Volumes:    opts.Volumes,
+		Containers: opts.Containers,
+		BuildCache: opts.BuildCache,
+	})
+	if status.Code(err) == codes.Unimplemented {
+		return container.PruneResult{}, fmt.Errorf("agent cannot prune: %w", errors.ErrUnsupported)
+	}
+	if err != nil {
+		return container.PruneResult{}, err
+	}
+	return container.PruneResult{SpaceReclaimed: resp.SpaceReclaimed}, nil
+}
+
+func (c *Client) UpdateContainer(ctx context.Context, containerID string, progressCh chan<- container.UpdateProgress) (bool, error) {
+	defer close(progressCh)
+
+	streamCtx, detach, cancel := swapStreamContext(ctx)
+	defer cancel()
+	stream, err := c.client.UpdateContainer(streamCtx, &pb.UpdateContainerRequest{ContainerId: containerID})
+	if err != nil {
+		return false, err
+	}
+	return receiveUpdateProgress(stream, progressCh, detach)
+}
+
+// swapStreamContext is the context an update or rollback stream runs under.
+// It follows ctx until detach is called, which receiveUpdateProgress does once
+// the agent reports recreating: before that, a request that times out still
+// cancels a pull on a wedged daemon; after it, the swap on the agent finishes
+// regardless, and the stream has to outlive the request too, because its last
+// progress carries the Result the update is recorded from.
+func swapStreamContext(ctx context.Context) (streamCtx context.Context, detach func() bool, cancel context.CancelFunc) {
+	streamCtx, cancel = context.WithCancel(context.WithoutCancel(ctx))
+	return streamCtx, context.AfterFunc(ctx, cancel), cancel
+}
+
+// RollbackContainer swaps a container on the agent back to the image it ran
+// before its last update.
+func (c *Client) RollbackContainer(ctx context.Context, containerID string, opts container.RollbackOptions, progressCh chan<- container.UpdateProgress) error {
+	defer close(progressCh)
+
+	streamCtx, detach, cancel := swapStreamContext(ctx)
+	defer cancel()
+	stream, err := c.client.RollbackContainer(streamCtx, &pb.RollbackContainerRequest{
+		ContainerId:        containerID,
+		ExpectedFromDigest: opts.ExpectedFromDigest,
+	})
+	if err == nil {
+		_, err = receiveUpdateProgress(stream, progressCh, detach)
+	}
+	// An agent older than rollbacks has no such method.
+	if status.Code(err) == codes.Unimplemented {
+		return fmt.Errorf("agent on host %s is too old to roll back; upgrade it", c.hostLabel())
+	}
+	return err
+}
+
+// hostLabel names the agent's host for a message: its name override, or its
+// endpoint.
+func (c *Client) hostLabel() string {
+	if c.nameOverride != "" {
+		return c.nameOverride
+	}
+	return c.endpoint
+}
+
+// receiveUpdateProgress relays an update's or a rollback's progress until the
+// stream ends, and reports whether it ended on done. It calls detach when the
+// swap starts (see swapStreamContext).
+func receiveUpdateProgress(stream interface {
+	Recv() (*pb.UpdateContainerProgress, error)
+}, progressCh chan<- container.UpdateProgress, detach func() bool) (bool, error) {
+	updated := false
+	for {
+		progress, err := stream.Recv()
+		if err == io.EOF {
+			return updated, nil
+		}
+		if err != nil {
+			return false, err
+		}
+
+		switch progress.Status {
+		case container.UpdateRecreating:
+			detach()
+		case container.UpdateDone:
+			updated = true
+		}
+
+		progressCh <- container.UpdateProgress{
+			Status:  progress.Status,
+			Layer:   progress.Layer,
+			Current: progress.Current,
+			Total:   progress.Total,
+			Error:   progress.Error,
+			Result:  updateResultFromProto(progress.GetResult()),
+		}
+	}
+}
+
+func (c *Client) CheckImageUpdate(ctx context.Context, containerID string, force bool) (imagecheck.Result, error) {
+	resp, err := c.client.CheckImageUpdate(ctx, &pb.CheckImageUpdateRequest{ContainerId: containerID, Force: force})
+	if err != nil {
+		return imagecheck.Result{}, err
+	}
+
+	return imagecheck.Result{
+		Status:         imagecheck.Status(resp.Status),
+		Image:          resp.Image,
+		LocalDigest:    resp.LocalDigest,
+		RemoteDigest:   resp.RemoteDigest,
+		CheckedAt:      time.Unix(0, resp.CheckedAt),
+		Reason:         resp.Reason,
+		CurrentVersion: resp.CurrentVersion,
+		LatestVersion:  resp.LatestVersion,
+		VersionReason:  resp.VersionReason,
+	}, nil
+}
+
+func (c *Client) ContainerAttach(ctx context.Context, containerId string) (*container.ExecSession, error) {
+	stream, err := c.client.ContainerAttach(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = stream.Send(&pb.ContainerAttachRequest{
+		ContainerId: containerId,
+	}); err != nil {
+		return nil, err
+	}
+	stdoutReader, stdoutWriter := io.Pipe()
+	stdinReader, stdinWriter := io.Pipe()
+
+	// stdin and resize both send on the stream, and a gRPC stream is not safe for
+	// concurrent sends.
+	var sendMu sync.Mutex
+	send := func(req *pb.ContainerAttachRequest) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		return stream.Send(req)
+	}
+
+	// The receive loop can be blocked writing to stdout when the caller stops reading;
+	// closing the reader unblocks it so the loop and the stream do not leak.
+	go func() {
+		<-ctx.Done()
+		stdoutReader.Close()
+	}()
+
+	go func() {
+		defer stdoutWriter.Close()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				msg, err := stream.Recv()
+				if err != nil {
+					return
+				}
+
+				stdoutWriter.Write(msg.Stdout)
+			}
+		}
+	}()
+
+	go func() {
+		defer stdinReader.Close()
+		buffer := make([]byte, 1024)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				n, err := stdinReader.Read(buffer)
+				if err != nil {
+					return
+				}
+
+				if err := send(&pb.ContainerAttachRequest{
+					Payload: &pb.ContainerAttachRequest_Stdin{
+						Stdin: buffer[:n],
+					},
+				}); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	// Create resize closure that sends via gRPC
+	resizeFn := func(width uint, height uint) error {
+		return send(&pb.ContainerAttachRequest{
+			Payload: &pb.ContainerAttachRequest_Resize{
+				Resize: &pb.ResizePayload{
+					Width:  uint32(width),
+					Height: uint32(height),
+				},
+			},
+		})
+	}
+
+	return &container.ExecSession{
+		Writer: stdinWriter,
+		Reader: stdoutReader,
+		Resize: resizeFn,
+	}, nil
+}
+
+func (c *Client) Exec(ctx context.Context, containerId string, cmd []string, events container.ExecEventReader, stdout io.Writer) error {
+	stream, err := c.client.ContainerExec(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err = stream.Send(&pb.ContainerExecRequest{
+		ContainerId: containerId,
+		Command:     cmd,
+	}); err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+
+	// Read from gRPC stream and write to stdout
+	wg.Go(func() {
+		for {
+			msg, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			stdout.Write(msg.Stdout)
+		}
+	})
+
+	// Read events and convert to gRPC messages
+	wg.Go(func() {
+		for {
+			event, err := events.ReadEvent()
+			if err != nil {
+				return
+			}
+
+			switch event.Type {
+			case "userinput":
+				stream.Send(&pb.ContainerExecRequest{
+					Payload: &pb.ContainerExecRequest_Stdin{
+						Stdin: []byte(event.Data),
+					},
+				})
+			case "resize":
+				stream.Send(&pb.ContainerExecRequest{
+					Payload: &pb.ContainerExecRequest_Resize{
+						Resize: &pb.ResizePayload{
+							Width:  uint32(event.Width),
+							Height: uint32(event.Height),
+						},
+					},
+				})
+			}
+		}
+	})
+
+	wg.Wait()
+	return nil
+}
+
+func (c *Client) Close() error {
+	return c.conn.Close()
+}
+
+func (c *Client) UpdateNotificationConfig(ctx context.Context, subscriptions []types.SubscriptionConfig, dispatchers []types.DispatcherConfig) error {
+	pbSubs := make([]*pb.NotificationSubscription, len(subscriptions))
+	for i, sub := range subscriptions {
+		pbSubs[i] = &pb.NotificationSubscription{
+			Id:                  int32(sub.ID),
+			Name:                sub.Name,
+			Enabled:             sub.Enabled,
+			DispatcherId:        int32(sub.DispatcherID),
+			LogExpression:       sub.LogExpression,
+			ContainerExpression: sub.ContainerExpression,
+			MetricExpression:    sub.MetricExpression,
+			Cooldown:            int32(sub.Cooldown),
+			SampleWindow:        int32(sub.SampleWindow),
+			Immediate:           sub.Immediate,
+			EventExpression:     sub.EventExpression,
+		}
+	}
+
+	pbDispatchers := make([]*pb.NotificationDispatcher, len(dispatchers))
+	for i, d := range dispatchers {
+		pbDispatchers[i] = &pb.NotificationDispatcher{
+			Id:       int32(d.ID),
+			Name:     d.Name,
+			Type:     d.Type,
+			Url:      d.URL,
+			Template: d.Template,
+			Headers:  d.Headers,
+		}
+	}
+
+	_, err := c.client.UpdateNotificationConfig(ctx, &pb.UpdateNotificationConfigRequest{
+		Subscriptions: pbSubs,
+		Dispatchers:   pbDispatchers,
+	})
+	return err
+}
+
+func (c *Client) UpdateCloudConfig(ctx context.Context, cloudConfig *types.CloudConfig) error {
+	req := &pb.UpdateCloudConfigRequest{}
+	if cloudConfig != nil {
+		req.CloudConfig = &pb.NotificationCloudConfig{
+			ApiKey:     cloudConfig.APIKey,
+			Prefix:     cloudConfig.Prefix,
+			StreamLogs: cloudConfig.StreamLogs,
+		}
+		if cloudConfig.ExpiresAt != nil {
+			req.CloudConfig.ExpiresAt = timestamppb.New(*cloudConfig.ExpiresAt)
+		}
+	}
+	_, err := c.client.UpdateCloudConfig(ctx, req)
+	return err
+}
+
+func (c *Client) GetNotificationStats(ctx context.Context) ([]types.SubscriptionStats, error) {
+	resp, err := c.client.GetNotificationStats(ctx, &pb.GetNotificationStatsRequest{})
+	if err != nil {
+		return nil, err
+	}
+
+	stats := make([]types.SubscriptionStats, len(resp.Stats))
+	for i, s := range resp.Stats {
+		var lastTriggered *time.Time
+		if s.LastTriggeredAt != nil {
+			t := s.LastTriggeredAt.AsTime()
+			if !t.IsZero() {
+				lastTriggered = &t
+			}
+		}
+		stats[i] = types.SubscriptionStats{
+			SubscriptionID:        int(s.SubscriptionId),
+			TriggerCount:          s.TriggerCount,
+			LastTriggeredAt:       lastTriggered,
+			TriggeredContainerIDs: s.TriggeredContainerIds,
+		}
+	}
+	return stats, nil
+}
+
+func jsonBytesToFields(b []byte) container.Fields[any] {
+	data, _ := container.ParseFields(b)
+	return data
+}

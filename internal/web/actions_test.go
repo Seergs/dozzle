@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/amir20/dozzle/internal/container"
+	"github.com/amir20/dozzle/internal/container/docker/swap/swaptest"
 	docker_types "github.com/moby/moby/api/types/container"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -18,7 +19,7 @@ import (
 
 func mockedClient() *MockedClient {
 	mockedClient := new(MockedClient)
-	c := container.Container{ID: "123"}
+	c := container.Container{ID: "123", State: "running"}
 
 	mockedClient.On("FindContainer", mock.Anything, "123").Return(c, nil)
 	mockedClient.On("FindContainer", mock.Anything, "456").Return(container.Container{}, errors.New("container not found"))
@@ -99,6 +100,7 @@ func Test_handler_containerUpdate_up_to_date(t *testing.T) {
 
 	inspectResp := docker_types.InspectResponse{
 		Image: "sha256:current",
+		State: &docker_types.State{Running: true, Status: "running"},
 		Config: &docker_types.Config{
 			Image: "test:v1",
 		},
@@ -121,12 +123,55 @@ func Test_handler_containerUpdate_up_to_date(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), `"up-to-date"`)
 }
 
+// A stopped container is refused before the progress stream opens, and the
+// host is never asked.
+func Test_handler_containerUpdate_stopped(t *testing.T) {
+	m := new(MockedClient)
+	c := container.Container{ID: "123", State: "exited"}
+	m.On("FindContainer", mock.Anything, "123").Return(c, nil)
+	m.On("Host").Return(container.Host{ID: "localhost"})
+	m.On("ListContainers", mock.Anything, mock.Anything).Return([]container.Container{c}, nil)
+	m.On("ContainerEvents", mock.Anything, mock.Anything).Return(nil)
+
+	handler := createHandler(m, nil, Config{Base: "/", EnableActions: true, Authorization: Authorization{Provider: NONE}})
+	req, err := http.NewRequest("POST", "/api/hosts/localhost/containers/123/actions/update", nil)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusConflict, rr.Code)
+	assert.Contains(t, rr.Body.String(), container.ErrNotRunning.Error())
+	m.AssertNotCalled(t, "ContainerInspect", mock.Anything, mock.Anything)
+	m.AssertNotCalled(t, "ImagePull", mock.Anything, mock.Anything)
+}
+
+// A container labelled check is refused before the progress stream opens, and
+// the host is never asked.
+func Test_handler_containerUpdate_check_only(t *testing.T) {
+	m := new(MockedClient)
+	c := container.Container{ID: "123", State: "running", Labels: map[string]string{"dev.dozzle.update": "check"}}
+	m.On("FindContainer", mock.Anything, "123").Return(c, nil)
+	m.On("Host").Return(container.Host{ID: "localhost"})
+	m.On("ListContainers", mock.Anything, mock.Anything).Return([]container.Container{c}, nil)
+	m.On("ContainerEvents", mock.Anything, mock.Anything).Return(nil)
+
+	handler := createHandler(m, nil, Config{Base: "/", EnableActions: true, Authorization: Authorization{Provider: NONE}})
+	req, err := http.NewRequest("POST", "/api/hosts/localhost/containers/123/actions/update", nil)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Contains(t, rr.Body.String(), container.ErrCheckOnly.Error())
+	m.AssertNotCalled(t, "ContainerInspect", mock.Anything, mock.Anything)
+	m.AssertNotCalled(t, "ImagePull", mock.Anything, mock.Anything)
+}
+
 func Test_handler_containerUpdate_new_image(t *testing.T) {
 	m := new(MockedClient)
-	c := container.Container{ID: "123"}
+	c := container.Container{ID: "123", State: "running"}
 
 	m.On("FindContainer", mock.Anything, "123").Return(c, nil)
-	m.On("ContainerActions", mock.Anything, container.Start, "new-123").Return(nil)
 	m.On("Host").Return(container.Host{ID: "localhost"})
 	m.On("ListContainers", mock.Anything, mock.Anything).Return([]container.Container{c}, nil)
 	m.On("ContainerEvents", mock.Anything, mock.Anything).Return(nil)
@@ -134,9 +179,11 @@ func Test_handler_containerUpdate_new_image(t *testing.T) {
 	inspectResp := docker_types.InspectResponse{
 		Name:  "/test-container",
 		Image: "sha256:old",
+		State: &docker_types.State{Running: true, Status: "running"},
 		Config: &docker_types.Config{
 			Image: "test:v1",
 		},
+		HostConfig:      &docker_types.HostConfig{},
 		NetworkSettings: &docker_types.NetworkSettings{},
 	}
 	m.On("ContainerInspect", mock.Anything, "123").Return(inspectResp, nil)
@@ -145,8 +192,69 @@ func Test_handler_containerUpdate_new_image(t *testing.T) {
 		`{"status":"Status: Downloaded newer image for test:v1"}` + "\n"
 	m.On("ImagePull", mock.Anything, "test:v1").Return(io.NopCloser(strings.NewReader(pullResp)), nil)
 	m.On("ImageID", mock.Anything, "test:v1").Return("sha256:new", nil)
-	m.On("ContainerRemove", mock.Anything, "123").Return(nil)
-	m.On("ContainerCreate", mock.Anything, mock.Anything, "test-container").Return("new-123", nil)
+	m.On("NetworkDependents", mock.Anything, mock.Anything, "test-container").Return(nil, nil)
+	swaptest.FastTimings(t)
+	m.engine = swaptest.New(inspectResp)
+	m.engine.NewIDs = []string{"new-123"}
+
+	handler := createHandler(m, nil, Config{Base: "/", EnableActions: true, Authorization: Authorization{Provider: NONE}})
+	req, err := http.NewRequest("POST", "/api/hosts/localhost/containers/123/actions/update", nil)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	assert.Equal(t, 200, rr.Code)
+	assert.Contains(t, rr.Body.String(), `"verifying"`)
+	assert.Contains(t, rr.Body.String(), `"done"`)
+	assert.Equal(t, "sha256:old", m.engine.Created[0].Config.Labels[container.PreviousImageLabel])
+}
+
+// A container joined to the updated one's network namespace by id (compose's
+// network_mode: service:x) is cut off when the old one goes, so it is
+// recreated pointing at the replacement. #5289
+func Test_handler_containerUpdate_rejoins_network_dependents(t *testing.T) {
+	const oldID = "1230000000000000000000000000000000000000000000000000000000000000"
+	m := new(MockedClient)
+	c := container.Container{ID: "123", State: "running"}
+
+	m.On("FindContainer", mock.Anything, "123").Return(c, nil)
+	m.On("Host").Return(container.Host{ID: "localhost"})
+	m.On("ListContainers", mock.Anything, mock.Anything).Return([]container.Container{c}, nil)
+	m.On("ContainerEvents", mock.Anything, mock.Anything).Return(nil)
+
+	sidecar := docker_types.InspectResponse{
+		ID:              oldID,
+		Name:            "/sidecar",
+		Image:           "sha256:old",
+		State:           &docker_types.State{Running: true, Status: "running"},
+		Config:          &docker_types.Config{Image: "test:v1"},
+		HostConfig:      &docker_types.HostConfig{},
+		NetworkSettings: &docker_types.NetworkSettings{},
+	}
+	m.On("ContainerInspect", mock.Anything, "123").Return(sidecar, nil)
+	swaptest.FastTimings(t)
+	m.engine = swaptest.New(sidecar)
+	m.engine.NewIDs = []string{"new-123"}
+	m.On("ContainerInspect", mock.Anything, "app-id").Return(docker_types.InspectResponse{
+		ID:         "app-id",
+		Name:       "/app",
+		Image:      "sha256:app",
+		State:      &docker_types.State{Running: true},
+		Config:     &docker_types.Config{Image: "app:latest"},
+		HostConfig: &docker_types.HostConfig{NetworkMode: "container:" + oldID},
+	}, nil)
+
+	pullResp := `{"status":"Status: Downloaded newer image for test:v1"}` + "\n"
+	m.On("ImagePull", mock.Anything, "test:v1").Return(io.NopCloser(strings.NewReader(pullResp)), nil)
+	m.On("ImageID", mock.Anything, "test:v1").Return("sha256:new", nil)
+	m.On("NetworkDependents", mock.Anything, oldID, "sidecar").Return([]string{"app-id"}, nil)
+
+	m.On("ContainerActions", mock.Anything, container.Stop, "app-id").Return(nil)
+	m.On("ContainerRemove", mock.Anything, "app-id").Return(nil)
+	m.On("ContainerCreate", mock.Anything, mock.MatchedBy(func(i docker_types.InspectResponse) bool {
+		return i.HostConfig.NetworkMode == "container:new-123"
+	}), "app").Return("new-app", nil)
+	m.On("ContainerActions", mock.Anything, container.Start, "new-app").Return(nil)
 
 	handler := createHandler(m, nil, Config{Base: "/", EnableActions: true, Authorization: Authorization{Provider: NONE}})
 	req, err := http.NewRequest("POST", "/api/hosts/localhost/containers/123/actions/update", nil)
@@ -156,16 +264,16 @@ func Test_handler_containerUpdate_new_image(t *testing.T) {
 	handler.ServeHTTP(rr, req)
 	assert.Equal(t, 200, rr.Code)
 	assert.Contains(t, rr.Body.String(), `"done"`)
+	m.AssertCalled(t, "ContainerActions", mock.Anything, container.Start, "new-app")
 }
 
 // A pull that reports nothing new must still recreate when the tag has moved
 // on locally, which happens when the image was pulled or built beforehand.
 func Test_handler_containerUpdate_recreates_when_image_already_local(t *testing.T) {
 	m := new(MockedClient)
-	c := container.Container{ID: "123"}
+	c := container.Container{ID: "123", State: "running"}
 
 	m.On("FindContainer", mock.Anything, "123").Return(c, nil)
-	m.On("ContainerActions", mock.Anything, container.Start, "new-123").Return(nil)
 	m.On("Host").Return(container.Host{ID: "localhost"})
 	m.On("ListContainers", mock.Anything, mock.Anything).Return([]container.Container{c}, nil)
 	m.On("ContainerEvents", mock.Anything, mock.Anything).Return(nil)
@@ -173,9 +281,11 @@ func Test_handler_containerUpdate_recreates_when_image_already_local(t *testing.
 	inspectResp := docker_types.InspectResponse{
 		Name:  "/test-container",
 		Image: "sha256:old",
+		State: &docker_types.State{Running: true, Status: "running"},
 		Config: &docker_types.Config{
 			Image: "test:v1",
 		},
+		HostConfig:      &docker_types.HostConfig{},
 		NetworkSettings: &docker_types.NetworkSettings{},
 	}
 	m.On("ContainerInspect", mock.Anything, "123").Return(inspectResp, nil)
@@ -185,8 +295,10 @@ func Test_handler_containerUpdate_recreates_when_image_already_local(t *testing.
 	m.On("ImagePull", mock.Anything, "test:v1").Return(io.NopCloser(strings.NewReader(pullResp)), nil)
 	// The tag nonetheless points somewhere else than the running container.
 	m.On("ImageID", mock.Anything, "test:v1").Return("sha256:new", nil)
-	m.On("ContainerRemove", mock.Anything, "123").Return(nil)
-	m.On("ContainerCreate", mock.Anything, mock.Anything, "test-container").Return("new-123", nil)
+	m.On("NetworkDependents", mock.Anything, mock.Anything, "test-container").Return(nil, nil)
+	swaptest.FastTimings(t)
+	m.engine = swaptest.New(inspectResp)
+	m.engine.NewIDs = []string{"new-123"}
 
 	handler := createHandler(m, nil, Config{Base: "/", EnableActions: true, Authorization: Authorization{Provider: NONE}})
 	req, err := http.NewRequest("POST", "/api/hosts/localhost/containers/123/actions/update", nil)

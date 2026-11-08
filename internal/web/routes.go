@@ -3,19 +3,22 @@ package web
 import (
 	"context"
 	"io/fs"
+	"sync"
 	"time"
 
 	"net/http"
 	"strings"
 
 	"github.com/amir20/dozzle/internal/auth"
+	"github.com/amir20/dozzle/internal/cache"
 	"github.com/amir20/dozzle/internal/cloud"
 	"github.com/amir20/dozzle/internal/container"
 	"github.com/amir20/dozzle/internal/imagecheck"
 	dozzle_mcp "github.com/amir20/dozzle/internal/mcp"
+	mcpoauth "github.com/amir20/dozzle/internal/mcp/oauth"
 	"github.com/amir20/dozzle/internal/notification"
 	"github.com/amir20/dozzle/internal/notification/dispatcher"
-	container_support "github.com/amir20/dozzle/internal/support/container"
+	"github.com/amir20/dozzle/internal/releases"
 	"github.com/amir20/dozzle/types"
 
 	"github.com/go-chi/chi/v5"
@@ -36,26 +39,63 @@ const (
 	NONE          AuthProvider = "none"
 	SIMPLE        AuthProvider = "simple"
 	FORWARD_PROXY AuthProvider = "forward-proxy"
+	// OIDC is the provider where the identity provider is also the user
+	// database: no users.yml, no password form.
+	OIDC AuthProvider = "oidc"
 )
 
 // Config is a struct for configuring the web service
 type Config struct {
-	Base             string
-	Addr             string
-	Version          string
-	Hostname         string
-	NoAnalytics      bool
-	Dev              bool
-	Mode             string
-	Authorization    Authorization
-	EnableActions    bool
-	EnableShell      bool
-	EnableMCP        bool
-	DisableAvatars   bool
-	ReleaseCheckMode ReleaseCheckMode
-	ImageCheckMode   imagecheck.Mode
-	Labels           container.ContainerLabels
-	Cloud            CloudHooks
+	Base        string
+	Addr        string
+	Version     string
+	Hostname    string
+	NoAnalytics bool
+	// Beacon holds the install facts known at startup (mode, agents, shell...)
+	// that every beacon this process sends repeats.
+	Beacon             types.BeaconEvent
+	Dev                bool
+	Mode               string
+	Authorization      Authorization
+	EnableActions      bool
+	EnableShell        bool
+	EnableMCP          bool
+	MCPToken           string
+	DisableAvatars     bool
+	DisableSetupWizard bool
+	ReleaseCheckMode   ReleaseCheckMode
+	ImageCheckMode     imagecheck.Mode
+	Labels             container.ContainerLabels
+	Cloud              CloudHooks
+	Setup              SetupConfig
+}
+
+// SetupConfig is what the setup wizard needs to know about how this process
+// was configured. A Locked field was set by a flag or env var, so the wizard
+// shows it read-only instead of writing a dozzle.yml value that would lose.
+type SetupConfig struct {
+	LockedAuthProvider  bool
+	LockedEnableActions bool
+	LockedEnableShell   bool
+	// LockedAutoUpdate is true when either auto-update setting came from a flag
+	// or env var. AutoUpdateMode and AutoUpdateTime hold those values, nil when
+	// the setting is not locked.
+	LockedAutoUpdate bool
+	AutoUpdateMode   *string
+	AutoUpdateTime   *string
+	// UpdateContainers is the mode from --update-containers or its env var, nil
+	// when dozzle.yml decides.
+	UpdateContainers *string
+	// AutoPruneMode and AutoPruneTime are the clean up schedule from
+	// --auto-cleanup and --auto-cleanup-time, each nil when dozzle.yml decides.
+	AutoPruneMode *string
+	AutoPruneTime *string
+	StartedAt     time.Time
+	// EnvAgents are the agents from DOZZLE_REMOTE_AGENT, which the UI lists but
+	// cannot remove.
+	EnvAgents []string
+	// CustomCert is true when a cert pair was loaded from disk.
+	CustomCert bool
 }
 
 // CloudHooks bundles cloud-side callbacks the web layer invokes. Grouping
@@ -71,11 +111,31 @@ type CloudHooks struct {
 	OnUpdate func()
 	// SearchLogs proxies a substring/word-filter query to Doligence Cloud
 	// over the authenticated gRPC connection. Nil when cloud is not wired.
-	SearchLogs func(ctx context.Context, query string, limit int32, hostID, containerID string, before int64) (*cloud.SearchLogResult, error)
+	SearchLogs func(ctx context.Context, query string, limit int32, hostID, containerID string, before int64, volume, regex bool) (*cloud.SearchLogResult, error)
 	// GetAlerts fetches the alerts that fired on a set of containers inside a
 	// time window, so the log viewer can merge them into the stream on
 	// scrollback. Nil when cloud is not wired.
 	GetAlerts func(ctx context.Context, containerIDs []string, hostID string, fromNs, toNs int64, limit int32, includeFollowUps, includeEvents bool) (*cloud.AlertResult, error)
+
+	// GetRecentAlerts fetches what fired lately across the instance, for the
+	// notifications page and the container dot. Nil when cloud is not wired.
+	GetRecentAlerts func(ctx context.Context, sinceNs int64, limit int32, subscriptionID string, includeFollowUps bool) (*cloud.AlertResult, error)
+	// GetRecentDeploys fetches the container updates Cloud recorded lately, with
+	// its verdict on each, for the megaphone. Nil when cloud is not wired.
+	GetRecentDeploys func(ctx context.Context, sinceNs int64, limit int32) ([]cloud.RecentDeploy, error)
+	// GetPatternContext asks Cloud's error memory about the lines on screen:
+	// whether each one's pattern is new for its container, or louder than usual.
+	GetPatternContext func(ctx context.Context, lines []cloud.PatternLine, fromNs, toNs int64) ([]cloud.PatternContext, error)
+
+	// GetContainerMetrics reads back the stats this instance pushed for one
+	// container, past the live window the browser holds. Nil when cloud is not
+	// wired.
+	GetContainerMetrics func(ctx context.Context, containerName, hostID string, sinceNs, untilNs int64, buckets int32) (*cloud.MetricResult, error)
+
+	// Chat runs one assistant turn. The handler passes the principal it
+	// resolved from the request, so cloud's tool calls for that turn execute
+	// as the person who asked. Nil when cloud is not wired.
+	Chat func(ctx context.Context, message string, view cloud.ViewContext, userRef string, principal cloud.Principal, emit func(cloud.ChatEvent)) error
 }
 
 type Authorization struct {
@@ -90,18 +150,35 @@ type Authorizer interface {
 	CreateToken(string, string) (string, error)
 }
 
+// OAuthAuthorizer is an Authorizer that can also sign a user in through an
+// external provider. It is an optional interface rather than a new AuthProvider
+// value: OAuth is a second way to prove you are one of the users simple auth
+// already owns, so branching on Provider here would put the same user behind two
+// role-resolution paths. A third vendor touches none of this routing.
+type OAuthAuthorizer interface {
+	Authorizer
+	// Providers is what the login page renders its buttons from.
+	Providers() []auth.OAuthProviderInfo
+	// PasswordLoginEnabled is false when no user has a password, so the login
+	// page can drop the form rather than offer one that cannot succeed.
+	PasswordLoginEnabled() bool
+	LoginHandler(http.ResponseWriter, *http.Request)
+	CallbackHandler(http.ResponseWriter, *http.Request)
+}
+
 type HostService interface {
-	FindContainer(host string, id string, labels container.ContainerLabels) (*container_support.ContainerService, error)
+	FindContainer(host string, id string, labels container.ContainerLabels) (*container.ContainerService, error)
 	ListContainersForHost(host string, labels container.ContainerLabels) ([]container.Container, error)
 	ListAllContainers(labels container.ContainerLabels) ([]container.Container, []error)
-	ListAllContainersFiltered(userFilter container.ContainerLabels, filter container_support.ContainerFilter) ([]container.Container, []error)
+	ListAllContainersFiltered(userFilter container.ContainerLabels, filter container.ContainerFilter) ([]container.Container, []error)
 	SubscribeEventsAndStats(ctx context.Context, events chan<- container.ContainerEvent, stats chan<- container.ContainerStat)
-	SubscribeContainersStarted(ctx context.Context, containers chan<- container.Container, filter container_support.ContainerFilter)
+	SubscribeContainersStarted(ctx context.Context, containers chan<- container.Container, filter container.ContainerFilter)
 	Hosts() []container.Host
 	LocalHost() (container.Host, error)
 	SubscribeAvailableHosts(ctx context.Context, hosts chan<- container.Host)
 	LocalClients() []container.Client
-	LocalClientServices() []container_support.ClientService
+	LocalClientServices() []container.ClientService
+	ClientServices(retry bool) []container.ClientService
 	// Notification methods
 	AddSubscription(sub *notification.Subscription) error
 	RemoveSubscription(id int)
@@ -124,16 +201,48 @@ type handler struct {
 	content     fs.FS
 	config      *Config
 	hostService HostService
+
+	releasesOnce  sync.Once
+	releasesCache *cache.Cache[[]releases.Release]
+
+	// guards the throttle around reconcileHosts
+	reconcileMu  sync.Mutex
+	reconciling  bool
+	reconciledAt time.Time
+
+	// One shared ticker keeps every open tab's host card current. It is started
+	// lazily on the first subscriber and reads each host once per interval, the
+	// agents over the connections they already hold, so the work grows with the
+	// number of hosts and not with the number of tabs.
+	hostMetricsOnce sync.Once
+	hostMetricsMu   sync.Mutex
+	hostMetricsSubs map[chan []hostMetricsEvent]struct{}
+
+	cloudLinks cloudLinkStates
 }
 
-func CreateServer(hostService HostService, content fs.FS, config Config) *http.Server {
+// Server is the HTTP server plus the usage beacon hooks main runs around it.
+type Server struct {
+	*http.Server
+	// RunUsageBeacon sends the daily usage beacon until ctx ends.
+	RunUsageBeacon func(ctx context.Context)
+	// FlushUsage sends the usage counted since the last beacon, if any, waiting
+	// a few seconds at most. Counters otherwise only leave on the 24h tick, so
+	// without this every restart would drop up to a day of them.
+	FlushUsage func()
+}
+
+func CreateServer(hostService HostService, content fs.FS, config Config) *Server {
 	handler := &handler{
 		content:     content,
 		config:      &config,
 		hostService: hostService,
 	}
-
-	return &http.Server{Addr: config.Addr, Handler: createRouter(handler)}
+	return &Server{
+		Server:         &http.Server{Addr: config.Addr, Handler: createRouter(handler)},
+		RunUsageBeacon: handler.runUsageBeacon,
+		FlushUsage:     handler.flushUsage,
+	}
 }
 
 var fileServer http.Handler
@@ -151,9 +260,33 @@ func createRouter(h *handler) *chi.Mux {
 		log.Fatal().Msg("Authorization provider is set but no authorizer is provided")
 	}
 
+	// MCP clients sign in through Dozzle's own authorization server whenever
+	// sessions are JWTs Dozzle signs. Forward-proxy auth has none, and the proxy
+	// already authenticates MCP requests the same way it does the browser's.
+	var mcpOAuth *mcpoauth.Server
+	if h.config.EnableMCP {
+		if tokens, ok := h.config.Authorization.Authorizer.(auth.TokenAuthorizer); ok && (h.config.Authorization.Provider == SIMPLE || h.config.Authorization.Provider == OIDC) {
+			mcpOAuth = mcpoauth.New(tokens, base).WithStaticToken(h.config.MCPToken)
+		}
+	}
+
+	// Clients look for metadata at the origin root with the base inserted in the
+	// path (RFC 8414 and RFC 9728). That only reaches Dozzle when a proxy
+	// forwards more than the base, so the challenge also points under the base.
+	if mcpOAuth != nil && base != "/" {
+		r.Get("/.well-known/oauth-authorization-server"+base, mcpOAuth.AuthServerMetadata)
+		r.Get("/.well-known/oauth-protected-resource"+base+"/api/mcp", mcpOAuth.ResourceMetadata)
+	}
+
 	r.Route(base, func(r chi.Router) {
 		if h.config.Authorization.Provider != NONE {
 			r.Use(h.config.Authorization.Authorizer.AuthMiddleware)
+		}
+
+		if mcpOAuth != nil {
+			r.Get("/.well-known/oauth-authorization-server", mcpOAuth.AuthServerMetadata)
+			r.Get("/.well-known/oauth-protected-resource", mcpOAuth.ResourceMetadata)
+			r.Get("/.well-known/oauth-protected-resource/api/mcp", mcpOAuth.ResourceMetadata)
 		}
 
 		r.Route("/api", func(r chi.Router) {
@@ -164,11 +297,13 @@ func createRouter(h *handler) *chi.Mux {
 				}
 
 				// Log streams
-				r.Get("/hosts/{host}/containers/{id}/logs/stream", h.streamContainerLogs)
 				r.Get("/hosts/{host}/logs/stream", h.streamHostLogs)
-				r.Get("/hosts/{host}/containers/{id}/logs", h.fetchLogsBetweenDates)
-				r.Get("/hosts/{host}/logs/mergedStream/{ids}", h.streamLogsMerged)
-				r.Get("/containers/{hostIds}/download", h.downloadLogs) // formatted as host:container,host:container
+				r.Get("/hosts/{host}/containers/{id}/logs/histogram", h.fetchLogHistogram)
+				r.Get("/hosts/{host}/containers/{id}/inspect", h.inspectContainer)
+				r.Get("/hosts/{host}/containers/{id}/networks/{network}", h.inspectNetwork)
+				r.Get("/hosts/{host}/containers/{id}/volumes/{volume}", h.inspectVolume)
+				r.Get("/containers/logs/stream", h.streamContainerLogs) // ?container=<host>/<id>, repeated
+				r.Post("/containers/logs", h.containerLogs)             // form body: container=<host>/<id>, repeated; text, format=jsonl, or format=zip
 				r.Get("/labels/{labels}/logs/stream", h.streamLogsWithLabels)
 				r.Get("/groups/{group}/logs/stream", h.streamGroupedLogs)
 				r.Get("/host-groups/{group}/logs/stream", h.streamHostGroupLogs)
@@ -179,12 +314,31 @@ func createRouter(h *handler) *chi.Mux {
 				// air-gapped operator needs to be able to verify.
 				if h.config.ImageCheckMode != imagecheck.ModeOff {
 					r.Get("/hosts/{host}/containers/{id}/image/check", h.checkImageUpdate)
+					r.Get("/image/check", h.checkAllImageUpdates)
+					// Dozzle's own image, which the container route cannot answer
+					// for: label filters may well hide Dozzle from itself. Not
+					// behind actions, for the same reason as above.
+					if h.config.Mode == "server" {
+						r.Get("/update/self/check", h.checkSelfUpdate)
+					}
 				}
 
 				// Action
 				if h.config.EnableActions {
 					r.Post("/hosts/{host}/containers/{id}/actions/update", h.containerUpdate)
 					r.Post("/hosts/{host}/containers/{id}/actions/{action}", h.containerActions)
+					if h.config.Mode != "k8s" {
+						r.Post("/hosts/{host}/prune", h.pruneHost)
+						r.Get("/hosts/{host}/reclaimable", h.listReclaimable)
+					}
+					r.Post("/updates", h.startBulkUpdate)
+					r.Get("/updates/stream", h.streamBulkUpdate)
+					if h.config.Mode == "server" {
+						r.Post("/update/self", h.updateSelf)
+					}
+					if h.config.Mode == "k8s" {
+						r.Post("/k8s/workloads/{namespace}/{kind}/{name}/restart", h.rolloutRestart)
+					}
 				}
 				if h.config.EnableShell {
 					r.Get("/hosts/{host}/containers/{id}/attach", h.attach)
@@ -195,6 +349,7 @@ func createRouter(h *handler) *chi.Mux {
 					r.Get("/profile/avatar", h.avatar)
 				}
 				r.Patch("/profile", h.updateProfile)
+				r.Post("/usage", h.reportUsage)
 				r.Get("/version", h.version)
 				if log.Debug().Enabled() {
 					r.Get("/debug/store", h.debugStore)
@@ -220,45 +375,115 @@ func createRouter(h *handler) *chi.Mux {
 					r.Post("/test-webhook", h.testWebhook)
 				})
 
+				// Setup wizard. Server mode only; swarm and k8s never show it.
+				if h.config.Mode == "server" {
+					// What the auto-update schedule will update, for
+					// Settings → Updates. Read only: the mode is saved with
+					// the rest of setup, and labels are set in compose.
+					r.Get("/updates/policy", h.getUpdatePolicies)
+					r.Get("/setup", h.getSetup)
+					r.Patch("/setup/config", h.updateSetupConfig)
+					r.Post("/setup/restart", h.restartSetup)
+					r.Post("/setup/agents", h.addSetupAgent)
+					r.Delete("/setup/agents", h.removeSetupAgent)
+					r.Post("/setup/agent-cert", h.agentCert)
+					// Choosing a login only exists while there is none.
+					if h.config.Authorization.Provider == NONE {
+						r.Post("/setup/account", h.createSetupAccount)
+						r.Post("/setup/auth", h.updateSetupAuth)
+					}
+				}
+
 				// Releases API
 				r.Get("/releases", h.getReleases)
 
 				// Cloud API
 				r.Route("/cloud", func(r chi.Router) {
-					r.Use(h.requireCloudRole)
+					// Reading is open to any authenticated user. The cloud role means
+					// "may link", not "may look" — cloud-backed reads are confined to
+					// the caller's own filter by the handlers themselves, the same way
+					// every other route is.
 					r.Get("/status", h.cloudStatus)
 					r.Get("/search/logs", h.cloudSearchLogs)
 					r.Get("/alerts", h.cloudAlerts)
+					r.Get("/alerts/recent", h.cloudRecentAlerts)
+					r.Get("/deploys/recent", h.cloudRecentDeploys)
+					r.Post("/patterns", h.cloudPatterns)
+					r.Get("/hosts/{host}/containers/{id}/metrics", h.cloudContainerMetrics)
+					r.Post("/chat", h.cloudChat)
 					r.Get("/config", h.cloudConfig)
-					r.Patch("/config", h.updateCloudConfig)
-					r.Delete("/config", h.deleteCloudConfig)
 					r.Post("/feedback", h.cloudFeedback)
-					// Cloud callback handles the OAuth-style code exchange. It must stay
-					// authenticated so an unauthenticated attacker cannot force-link the
-					// instance to their own cloud account via SetCloudConfig.
-					r.Get("/callback", h.cloudCallback)
+
+					// Linking and configuration stay behind the role. Relinking
+					// repoints alert dispatch, log streaming and tool execution at a
+					// different cloud account for everyone on the instance.
+					r.With(h.requireCloudRole).Patch("/config", h.updateCloudConfig)
+					r.With(h.requireCloudRole).Delete("/config", h.deleteCloudConfig)
+					// Linking is a round trip through Dozzle Cloud. /link mints the
+					// state the callback demands back, so a cross-site navigation
+					// carrying the session cookie cannot link the instance to an
+					// attacker's account. The callback must also stay authenticated
+					// so an unauthenticated caller cannot reach SetCloudConfig.
+					r.With(h.requireCloudRole).Post("/link", h.startCloudLink)
+					r.With(h.requireCloudRole).Get("/callback", h.cloudCallback)
 				})
 
 				// MCP (Model Context Protocol) endpoint
-				if h.config.EnableMCP {
+				if h.config.EnableMCP && mcpOAuth == nil {
 					mcpServer := dozzle_mcp.NewServer(h.hostService, h.config.Labels, h.config.Version)
 					r.Mount("/mcp", mcpServer.Handler())
 				}
+
+				// What the consent page asks and answers.
+				if mcpOAuth != nil {
+					r.Get("/oauth/authorize", mcpOAuth.DescribeRequest)
+					r.Post("/oauth/authorize", mcpOAuth.Decide)
+				}
 			})
 
+			// Outside RequireAuthentication: the middleware accepts a session or
+			// an access token, and answers neither with the challenge an MCP
+			// client needs to start signing in.
+			if mcpOAuth != nil {
+				mcpServer := dozzle_mcp.NewServer(h.hostService, h.config.Labels, h.config.Version)
+				r.With(mcpoauth.CORS, mcpOAuth.Middleware).Mount("/mcp", mcpServer.Handler())
+
+				// Public: they are how an MCP client gets a token in the first place.
+				r.With(mcpoauth.CORS).Post("/oauth/register", mcpOAuth.Register)
+				r.With(mcpoauth.CORS).Post("/oauth/token", mcpOAuth.Token)
+				r.With(mcpoauth.CORS).Options("/oauth/register", func(http.ResponseWriter, *http.Request) {})
+				r.With(mcpoauth.CORS).Options("/oauth/token", func(http.ResponseWriter, *http.Request) {})
+			}
+
 			// Public API routes
-			if h.config.Authorization.Provider == SIMPLE {
-				r.Post("/token", h.createToken)
+			switch h.config.Authorization.Provider {
+			case SIMPLE, OIDC:
+				// No POST /token under oidc: there is no password to check, and
+				// not registering the route is what makes that verifiable.
+				if h.config.Authorization.Provider == SIMPLE {
+					r.Post("/token", h.createToken)
+				}
 				r.Delete("/token", h.deleteToken)
+
+				// Both have to stay unauthenticated: they are how a session is
+				// obtained in the first place.
+				if oauth, ok := h.config.Authorization.Authorizer.(OAuthAuthorizer); ok {
+					r.Get("/auth/login", oauth.LoginHandler)
+					r.Get("/auth/callback", oauth.CallbackHandler)
+				}
 			}
 		})
 
 		r.Get("/healthcheck", h.healthcheck)
 		r.Get("/manifest.webmanifest", h.manifest)
 		r.Get("/sw.js", h.serviceWorker)
+		// Unauthenticated on purpose: it holds nothing, and the service worker has
+		// to be able to cache it while the session is expired, which is one of the
+		// times it is most needed.
+		r.Get("/offline.html", h.offlinePage)
 
 		defaultHandler := http.StripPrefix(strings.Replace(base+"/", "//", "/", 1), http.HandlerFunc(h.index))
-		r.With(Brotli).Get("/*", func(w http.ResponseWriter, req *http.Request) {
+		r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
 			defaultHandler.ServeHTTP(w, req)
 		})
 	})
@@ -276,12 +501,8 @@ func createRouter(h *handler) *chi.Mux {
 	return r
 }
 
+// hostKey can be empty: chi matches /hosts//... with host "". Callers treat that
+// like any other unknown host, except streamHostLogs, which has to check itself.
 func hostKey(r *http.Request) string {
-	host := chi.URLParam(r, "host")
-
-	if host == "" {
-		log.Fatal().Str("url", r.URL.String()).Msg("Host parameter not found in the URL path")
-	}
-
-	return host
+	return chi.URLParam(r, "host")
 }

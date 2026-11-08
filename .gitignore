@@ -4,9 +4,8 @@ dist
 node_modules
 .cache
 static
-dozzle
+/dozzle
 coverage
-.pnpm-debug.log
 coverage.out
 .netlify
 /test-results/
@@ -18,3 +17,6 @@ tmp
 .claude/settings.local.json
 .claude/worktrees/
 .playwright-mcp/
+e2e/data/session_secret
+.user-ref-secret
+/public/duckdb-extensions/

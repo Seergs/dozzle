@@ -6,7 +6,7 @@
 
 Dozzle is a lightweight, web-based application for monitoring Docker logs in real time. It doesn't store any log files—it's designed purely for live log viewing.
 
-https://github.com/user-attachments/assets/66a7b4b2-d6c9-4fca-ab04-aef6cd7c0c31
+![Dozzle demo](.github/demo.gif)
 
 [![Docker Image Size (latest by date)](https://img.shields.io/docker/image-size/amir20/dozzle)](https://hub.docker.com/r/amir20/dozzle/)
 [![Docker Pulls](https://img.shields.io/docker/pulls/amir20/dozzle.svg)](https://hub.docker.com/r/amir20/dozzle/)
@@ -35,13 +35,17 @@ Dozzle has been tested with hundreds of containers. However, it doesn't support 
 
 Dozzle is a small container (7 MB compressed). Pull the latest release with:
 
-    $ docker pull amir20/dozzle:latest
+```bash
+docker pull amir20/dozzle:latest
+```
 
 ### Running Dozzle
 
 The simplest way to use Dozzle is to run the Docker container. Mount the Docker Unix socket with `--volume` to `/var/run/docker.sock`:
 
-    $ docker run --name dozzle -d --volume=/var/run/docker.sock:/var/run/docker.sock -v dozzle_data:/data -p 8080:8080 amir20/dozzle:latest
+```bash
+docker run --name dozzle -d --volume=/var/run/docker.sock:/var/run/docker.sock -v dozzle_data:/data -p 8080:8080 amir20/dozzle:latest
+```
 
 Dozzle will be available at [http://localhost:8080/](http://localhost:8080/).
 
@@ -65,26 +69,28 @@ For advanced options like [authentication](https://dozzle.dev/guide/authenticati
 
 Images are published to both [Docker Hub](https://hub.docker.com/r/amir20/dozzle) and [ghcr.io](https://github.com/amir20/dozzle/pkgs/container/dozzle) with identical tags.
 
-| Tag                                             | Description                                                            |
-| ----------------------------------------------- | ---------------------------------------------------------------------- |
-| `latest`                                        | Most recent release. Recommended for most users.                       |
-| `v10.6.15`                                      | An exact release. Pin this for reproducible deployments.               |
-| `v10.6`                                         | Latest patch within that minor version. Picks up bug fixes only.       |
-| `v10`                                           | Latest release within that major version. Picks up new features too.   |
-| `alpine`                                        | Same as `latest`, but on an Alpine base instead of `scratch`.          |
-| `v10.6.15-alpine`, `v10.6-alpine`, `v10-alpine` | Alpine variants of the version tags above.                             |
-| `master`                                        | Built from the `master` branch on every push. Unreleased and unstable. |
-| `pr-1234`, `pr-1234-alpine`                     | Built from pull request #1234, for testing a fix before it ships.      |
+| Tag                                             | Description                                                          |
+| ----------------------------------------------- | -------------------------------------------------------------------- |
+| `latest`                                        | Most recent release. Recommended for most users.                     |
+| `v10.6.15`                                      | An exact release. Pin this for reproducible deployments.             |
+| `v10.6`                                         | Latest patch within that minor version. Picks up bug fixes only.     |
+| `v10`                                           | Latest release within that major version. Picks up new features too. |
+| `alpine`                                        | Same as `latest`, but on an Alpine base instead of `scratch`.        |
+| `v10.6.15-alpine`, `v10.6-alpine`, `v10-alpine` | Alpine variants of the version tags above.                           |
+| `main`                                          | Built from the `main` branch on every push. Unreleased and unstable. |
+| `pr-1234`, `pr-1234-alpine`                     | Built from pull request #1234, for testing a fix before it ships.    |
 
 The default images are built `FROM scratch` and contain only the Dozzle binary, which is why they are around 7 MB compressed. That also means there is no shell inside them. Use the `alpine` variants only if something in your setup needs one, most commonly platforms that bind-mount a `#!/bin/sh` wrapper over the container entrypoint such as Unraid's per-container Tailscale toggle. See the [FAQ](https://dozzle.dev/guide/faq) for details.
 
-Avoid `latest` and `master` in production. `latest` moves on every release and `master` is unreleased code.
+Avoid `latest` and `main` in production. `latest` moves on every release and `main` is unreleased code.
 
 ## Swarm Mode
 
 Dozzle works with Docker Swarm. You can run Dozzle as a global service:
 
-    $ docker service create --name dozzle --env DOZZLE_MODE=swarm --mode global --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock -p 8080:8080 amir20/dozzle:latest
+```bash
+docker service create --name dozzle --env DOZZLE_MODE=swarm --mode global --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock -p 8080:8080 amir20/dozzle:latest
+```
 
 See the [Swarm Mode](https://dozzle.dev/guide/swarm-mode) documentation for more details.
 
@@ -92,7 +98,9 @@ See the [Swarm Mode](https://dozzle.dev/guide/swarm-mode) documentation for more
 
 Dozzle can monitor multiple Docker hosts. Run Dozzle in agent mode with:
 
-    $ docker run -v /var/run/docker.sock:/var/run/docker.sock -p 7007:7007 amir20/dozzle:latest agent
+```bash
+docker run -v /var/run/docker.sock:/var/run/docker.sock -p 7007:7007 amir20/dozzle:latest agent
+```
 
 See the [Agent Mode](https://dozzle.dev/guide/agent) documentation for more details.
 
@@ -108,7 +116,7 @@ By default, Podman doesn't have a background process, but you can enable the rem
 
 First, verify if your Podman installation has the remote socket enabled:
 
-```
+```bash
 podman info
 ```
 
@@ -124,13 +132,14 @@ If it's not enabled, follow [this tutorial](https://github.com/containers/podman
 
 Once the Podman remote socket is enabled, you can run Dozzle:
 
-```
+```bash
 podman run --volume=/run/user/1000/podman/podman.sock:/var/run/docker.sock -d -p 8080:8080 docker.io/amir20/dozzle:latest
 ```
 
-Additionally, you need to create a fake engine-id to prevent `host not found` errors. Podman doesn't generate an engine-id like Docker does, due to its daemonless architecture.
+Nothing else is needed. Dozzle works out a stable host id for Podman on its own, since Podman is daemonless and has no engine identity to report.
 
-Create a file named `engine-id` under `/var/lib/docker`. On a system with Podman, you'll need to create the folder path as well. Place a UUID inside the file, for example using `uuidgen > engine-id`. The file should contain an identifier like: `b9f1d7fc-b459-4b6e-9f7a-e3d1cd2e14a9`.
+> [!NOTE]
+> Older versions of this page told you to create a `/var/lib/docker/engine-id` file to prevent `host not found` errors. That never worked. Podman's Docker-compatible `/info` endpoint does not read any file, it returns a new random UUID on every call, so Dozzle now derives the id instead. You can delete the file.
 
 For more details, see [Podman Info](docs/guide/podman.md) or the [FAQ](docs/guide/faq.md#i-am-seeing-host-not-found-error-in-the-logs-how-do-i-fix-it).
 
@@ -168,19 +177,19 @@ Want to contribute? Great! Dozzle has two parts: a **Go backend** that talks to 
 
 ### 1. Install the prerequisites
 
-You'll need [Go](https://go.dev/doc/install) (1.25+), [Node.js](https://nodejs.org/en/download/) (with [pnpm](https://pnpm.io/installation)), and [protoc](https://grpc.io/docs/protoc-installation/).
+You'll need [Go](https://go.dev/doc/install) (1.25+), [Node.js](https://nodejs.org/en/download/), [Bun](https://bun.com/docs/installation), and [protoc](https://grpc.io/docs/protoc-installation/).
 
 On macOS, you can install everything in one go:
 
 ```bash
-brew install go node pnpm protobuf
+brew install go node oven-sh/bun/bun protobuf
 ```
 
 On Linux (Debian/Ubuntu):
 
 ```bash
 sudo apt install golang nodejs protobuf-compiler
-npm install -g pnpm
+curl -fsSL https://bun.com/install | bash
 ```
 
 On Windows, we recommend using [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and following the Linux instructions.
@@ -190,7 +199,7 @@ On Windows, we recommend using [WSL2](https://learn.microsoft.com/en-us/windows/
 ```bash
 git clone https://github.com/amir20/dozzle.git
 cd dozzle
-pnpm install                # installs frontend dependencies
+bun install                 # installs frontend dependencies
 go install tool             # installs Go build tools listed in go.mod (air, protoc-gen-go, etc.)
 make generate               # generates TLS certificates and protobuf code (only needed once)
 ```
@@ -212,3 +221,14 @@ Try editing `assets/pages/index.vue` and saving — the browser updates instantl
 - **Nothing shows up at localhost:3100** — make sure Docker is running and the socket is accessible at `/var/run/docker.sock`.
 - **`make generate` fails** — confirm `protoc` is on your PATH (`protoc --version`).
 - **Still stuck?** Open a question in [GitHub Discussions](https://github.com/amir20/dozzle/discussions) — we're happy to help.
+
+## Adding App Icons
+
+Dozzle shows a logo next to containers whose image it recognizes. Icons are vendored from [homarr-labs/dashboard-icons](https://github.com/homarr-labs/dashboard-icons) into [`assets/icons/apps/`](assets/icons/apps/), and matching happens in `assets/utils/appIcons.ts`.
+
+The repo ships an `add-app-icon` skill in `.claude/skills/`. To add icons with an AI coding agent, paste this prompt and fill in the images:
+
+```
+Use the add-app-icon skill in .claude/skills/add-app-icon/SKILL.md to add app icons
+for these container images: <image1>, <image2>
+```

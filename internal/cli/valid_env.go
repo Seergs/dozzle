@@ -1,0 +1,41 @@
+package cli
+
+import (
+	"os"
+	"reflect"
+	"strings"
+
+	"github.com/amir20/dozzle/internal/agentcerts"
+	"github.com/rs/zerolog/log"
+)
+
+func ValidateEnvVars(types ...any) {
+	expectedEnvs := make(map[string]bool)
+	for _, t := range types {
+		typ := reflect.TypeOf(t)
+
+		for field := range typ.Fields() {
+			for tag := range strings.SplitSeq(field.Tag.Get("arg"), ",") {
+				if after, ok := strings.CutPrefix(tag, "env:"); ok {
+					expectedEnvs[after] = true
+				}
+			}
+		}
+	}
+
+	// Secrets may also arrive as <VAR>_FILE naming a file to read the value from.
+	for _, env := range fileBackedEnvNames() {
+		expectedEnvs[env+"_FILE"] = true
+	}
+
+	// Read straight from the environment rather than through a flag.
+	expectedEnvs[agentcerts.CertEnv] = true
+	expectedEnvs[agentcerts.KeyEnv] = true
+
+	for _, env := range os.Environ() {
+		actual, _, _ := strings.Cut(env, "=")
+		if strings.HasPrefix(actual, "DOZZLE_") && !expectedEnvs[actual] {
+			log.Warn().Str("env", actual).Msg("Unexpected environment variable")
+		}
+	}
+}
